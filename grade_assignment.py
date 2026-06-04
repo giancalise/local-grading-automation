@@ -169,7 +169,7 @@ def save_normalized_aligned_student_stl(stu_norm, best_flip, alignment_transform
 
 def extract_username(filename: str) -> str:
     stem = Path(filename).stem
-    return stem.split('-')[0].strip()
+    return stem.split('_')[0].strip()
 
 
 def compute_grade(shape_score, volume_ok, material_ok, sketch_ok) -> dict:
