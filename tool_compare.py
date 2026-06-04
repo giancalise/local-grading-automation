@@ -30,7 +30,7 @@ Score interpretation
 Output schema
 -------------
 {
-    "score":         float,        # 0.0–1.0
+    "score":         float,        # 0.0-1.0
     "method":        str,
     "details":       str,
     "volume_ratio":  float | None, # student_vol / solution_vol (mm³)

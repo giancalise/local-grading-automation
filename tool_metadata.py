@@ -36,9 +36,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pythoncom
-import win32com.client
-
 from sw_connection import get_connection
 
 logger = logging.getLogger(__name__)
