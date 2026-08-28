@@ -11,6 +11,9 @@ dist/
 build/
 *.spec
 
+# Runtime state
+.stl_prefs_backup.json
+
 # Credentials
 *.json.key
 *service-account*.json
@@ -22,3 +25,10 @@ build/
 # Editors
 .vscode/
 .idea/
+
+# Virtual environments
+.venv*/
+venv/
+
+# Local session state
+.claude/
