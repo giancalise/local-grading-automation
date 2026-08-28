@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs (contain student names, grades, file paths)
+*.log
+
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Credentials
+*.json.key
+*service-account*.json
+*credentials*.json
+.env
+*.pem
+*.p12
+
+# Editors
+.vscode/
+.idea/
