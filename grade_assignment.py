@@ -82,12 +82,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from pathlib import Path
-
-import pythoncom
-pythoncom.CoInitialize()
 
 # ---------------------------------------------------------------------------
 # Rubric weights (must sum to 1.0)
@@ -102,13 +100,15 @@ WEIGHT_SKETCHES  = 0.15
 # ---------------------------------------------------------------------------
 VOLUME_TOLERANCE = 0.01   # ±1% of solution volume
 SHAPE_THRESHOLD  = 0.95   # score >= this with correct volume = full shape credit
-VOXEL_RES        = 64     # 64 = maximum quality; 48 = production; 24 = fast dev
+VOXEL_RES        = 64     # hard floor per SPEC_v0.2 §7.4 — not a speed lever
 
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
+import pythoncom
 from popup_dismisser import ensure_dismisser_running
 from sw_connection import get_connection, recover_from_stall
+from check_result import CheckStatus
 from tool_export import export_file
 from tool_metadata import _read_summary_properties, _read_custom_properties, _filter_identity
 from tool_mass import _read_mass_properties, _read_material, get_mass_properties
@@ -116,6 +116,16 @@ from tool_sketch import _read_sketch_statuses
 from tool_compare import _normalize_mesh, _is_valid_mesh, compare_meshes_normalized, save_viewer_stls
 import trimesh
 import numpy as np
+
+# SPEC_v0.2 §11.3 (sw_timeout.with_timeout) is deliberately NOT wired in
+# here. Verified live during Milestone 1: its thread-based implementation
+# is unsafe for SolidWorks' single-threaded-apartment COM calls — running
+# open_part_silent/export_file on with_timeout's worker thread corrupted
+# the connection (SolidWorks itself kept running; the Python-side
+# connection was reported lost and had to fully reconnect), which is the
+# same class of hazard §15.5 describes for server.py's old threaded
+# grading_batch. See MILESTONE_1_REPORT.md. Needs a redesign (COM
+# marshaling or a process-kill watchdog) before it's safe to use here.
 
 
 # ---------------------------------------------------------------------------
@@ -172,22 +182,37 @@ def extract_username(filename: str) -> str:
     return stem.split('-')[0].strip()
 
 
-def compute_grade(shape_score, volume_ok, material_ok, sketch_ok) -> dict:
+def compute_grade(shape_status, shape_score, volume_status, material_status, sketch_status) -> dict:
     """
-    Volume-aware grading:
-      - Volume correct + shape >= threshold  → full shape credit
-      - Volume correct + shape < threshold   → proportional
-      - Volume wrong                         → raw shape score (more penalizing)
+    Three-state grading (SPEC_v0.2 §7.2, §15.1, §15.4).
+
+    A NOT_EVALUATED check withholds its points — same numeric effect as a
+    fail (zero points), but recorded as a distinct status the caller uses
+    to force needs_review. It is never silently rounded into "passed" or
+    "failed".
+
+    Volume-aware shape coupling (unchanged from the existing rubric design;
+    out of scope for this milestone — see SPEC_v0.2 §7.2 Q6): volume
+    correct + shape >= threshold gets full shape credit. The boost
+    requires volume_status to be PASS specifically — an unevaluated or
+    failed volume check must not unlock full shape credit.
     """
-    shape_credit = (1.0 if shape_score >= SHAPE_THRESHOLD else shape_score) \
-                   if volume_ok else shape_score
-    shape_pts    = round(shape_credit * WEIGHT_SHAPE * 100, 1)
-    volume_pts   = round((1.0 if volume_ok else 0.0) * WEIGHT_VOLUME * 100, 1)
-    material_pts = round((1.0 if material_ok else 0.0) * WEIGHT_MATERIAL * 100, 1)
-    sketch_pts   = round((1.0 if sketch_ok else 0.0) * WEIGHT_SKETCHES * 100, 1)
+    if shape_status == CheckStatus.NOT_EVALUATED or shape_score is None:
+        shape_pts = 0.0
+    else:
+        shape_credit = (
+            1.0 if (shape_score >= SHAPE_THRESHOLD and volume_status == CheckStatus.PASS)
+            else shape_score
+        )
+        shape_pts = round(shape_credit * WEIGHT_SHAPE * 100, 1)
+
+    volume_pts   = round(WEIGHT_VOLUME   * 100, 1) if volume_status   == CheckStatus.PASS else 0.0
+    material_pts = round(WEIGHT_MATERIAL * 100, 1) if material_status == CheckStatus.PASS else 0.0
+    sketch_pts   = round(WEIGHT_SKETCHES * 100, 1) if sketch_status   == CheckStatus.PASS else 0.0
+
     return {
         "total":           round(shape_pts + volume_pts + material_pts + sketch_pts, 1),
-        "shape_points":    shape_pts,
+        "shape_points":    round(shape_pts, 1),
         "volume_points":   volume_pts,
         "material_points": material_pts,
         "sketch_points":   sketch_pts,
@@ -209,12 +234,26 @@ def grade_assignment(
     solution_material: str | None = None,
     solution_volume: float | None = None,
     student_identity_map: dict | None = None,
+    progress_callback=None,
 ):
     """
+    progress_callback: optional callable(dict) invoked after each student
+    with {"current": int, "total": int, "filename": str, "elapsed_s":
+    float, "file_seconds": float}. Additive, minimal hook for the desktop
+    UI's live progress display (SPEC_v0.2 §10 step 6) — does not replace
+    the existing print() output.
+
     student_identity_map: optional dict mapping filename → {uid, display_name}
     When provided, grades use Firebase UID and display name instead of
     values derived from the filename or SolidWorks file metadata.
     """
+    # Explicit COM init on the thread that will actually make COM calls
+    # (SPEC_v0.2 §14.4) — this call must happen here, not at import time,
+    # since import can happen on a different thread than the one that runs
+    # this function (e.g. a web server's request-handling thread pool).
+    # All COM in this function stays on the calling thread (§15.5).
+    pythoncom.CoInitialize()
+
     identity = student_identity_map or {}
     ensure_dismisser_running()
     conn = get_connection()
@@ -240,6 +279,19 @@ def grade_assignment(
         # Export solution STL to temp first (raw export needed for normalization)
         solution_stl_tmp  = os.path.join(tmp_dir, "solution_raw.stl")
         solution_stl_dest = stl_folder / "solution.stl"   # final normalized path
+        # NOTE on with_timeout (SPEC_v0.2 §11.3): NOT wrapped here. Verified
+        # live during Milestone 1 that sw_timeout.py's existing thread-based
+        # implementation is unsafe for this call — SolidWorks' COM object is
+        # a single-threaded-apartment server, and running the wrapped call
+        # on with_timeout's worker thread corrupts the connection exactly
+        # the way §15.5 warns about for server.py's old threaded
+        # grading_batch, just via a different code path (confirmed: the
+        # live SolidWorks process kept running throughout, but the Python
+        # side reported "SW connection lost" and had to fully reconnect).
+        # See MILESTONE_1_REPORT.md for details. §11.3 is deliberately left
+        # unaddressed pending a redesign (COM marshaling or a
+        # process-kill-based watchdog) rather than shipping something that
+        # passed a quick look but broke live COM.
         export_result = export_file(solution_path, "STL", solution_stl_tmp)
         if not export_result["success"]:
             raise RuntimeError(f"Failed to export solution STL: {export_result['error']}")
@@ -331,8 +383,21 @@ def grade_assignment(
                 "error": None,
             }
 
+            # --- SPEC_v0.2 §15.3: grade a scratch copy, never the original ---
+            # Even with the read-only open strategy tried first, a student's
+            # actual submission is never handed to SolidWorks directly.
+            scratch_path = Path(tmp_dir) / f"scratch_{i}_{filename}"
+            mass_error   = None
+            sketch_error = None
+            sketch_statuses: list[dict] = []
             try:
-                doc, _ = conn.open_part_silent(str(student_path))
+                shutil.copy2(str(student_path), str(scratch_path))
+                os.chmod(str(scratch_path), stat.S_IREAD)
+
+                # NOTE on with_timeout (SPEC_v0.2 §11.3): NOT used here —
+                # see the note in PHASE 0 above. sw_timeout.py's thread-based
+                # implementation is unsafe for STA COM calls as-is.
+                doc, _ = conn.open_part_silent(str(scratch_path))
                 doc.ForceRebuild3(False)
 
                 # Metadata
@@ -351,16 +416,19 @@ def grade_assignment(
                 record["checks"]["volume_mm3"] = mass.get("volume")
                 record["checks"]["material"]   = mass.get("material_name")
                 record["checks"]["mass_kg"]    = mass.get("mass")
+                mass_error = mass.get("error")
 
                 # Sketches
-                sketches = _read_sketch_statuses(doc)
+                sketch_statuses = _read_sketch_statuses(doc)
                 record["checks"]["underdefined_sketches"] = [
-                    s["name"] for s in sketches if s["status"] == "UNDERDEFINED"
+                    s["name"] for s in sketch_statuses if s["status"] == "UNDERDEFINED"
                 ]
+                if not sketch_statuses:
+                    sketch_error = "no sketch features found or feature read failed"
 
                 # Export STL to temp first, then copy to persistent destination
-                stl_result = export_file(str(student_path), "STL", student_stl_tmp)
-                conn.close_doc(str(student_path))
+                stl_result = export_file(str(scratch_path), "STL", student_stl_tmp)
+                conn.close_doc(str(scratch_path))
 
                 if stl_result["success"]:
                     shutil.copy2(student_stl_tmp, student_stl_dest)
@@ -371,12 +439,19 @@ def grade_assignment(
             except Exception as e:
                 record["error"] = str(e)
                 record["flags"]["needs_review"] = True
-                try: conn.close_doc(str(student_path))
+                try: conn.close_doc(str(scratch_path))
                 except: pass
                 if recover_from_stall(timeout_s=10.0):
                     print(f"  ⚠ Recovered from SW stall")
                 else:
                     print(f"  ✗ SW crash — could not recover")
+            finally:
+                try:
+                    if scratch_path.exists():
+                        os.chmod(str(scratch_path), stat.S_IWRITE)
+                        scratch_path.unlink()
+                except Exception as e_cleanup:
+                    print(f"  ⚠ Could not remove scratch copy: {e_cleanup}")
 
             # Shape comparison (pure Python, no SW)
             if student_stl_dest.exists() and record["error"] is None:
@@ -409,34 +484,86 @@ def grade_assignment(
                     record["flags"]["needs_review"] = True
                     print(f"  ⚠ Shape comparison failed: {e}")
 
-            # Grading checks
+            # -------------------------------------------------------
+            # Grading checks — three states, never a silent pass/fail
+            # for a check that didn't actually run (SPEC_v0.2 §7.2,
+            # §15.1, §15.4).
+            # -------------------------------------------------------
             vol = record["checks"].get("volume_mm3")
             mat = record["checks"].get("material")
-            record["checks"]["volume_ok"]   = bool(
-                solution_volume and vol and
-                abs(vol - solution_volume) / solution_volume <= VOLUME_TOLERANCE
+            had_open_error = record["error"] is not None
+
+            # Volume: a failed read (or nothing to compare against) is
+            # not_evaluated, never a silent False the student didn't cause.
+            if had_open_error or vol is None or mass_error or solution_volume is None:
+                volume_status = CheckStatus.NOT_EVALUATED
+            elif abs(vol - solution_volume) / solution_volume <= VOLUME_TOLERANCE:
+                volume_status = CheckStatus.PASS
+            else:
+                volume_status = CheckStatus.FAIL
+            record["checks"]["volume_status"] = volume_status.value
+            record["checks"]["volume_ok"] = (
+                None if volume_status == CheckStatus.NOT_EVALUATED
+                else volume_status == CheckStatus.PASS
             )
-            record["checks"]["material_ok"] = bool(
-                mat and solution_material and
-                mat.lower() == solution_material.lower()
+
+            # Material
+            if had_open_error or not mat or not solution_material:
+                material_status = CheckStatus.NOT_EVALUATED
+            elif mat.lower() == solution_material.lower():
+                material_status = CheckStatus.PASS
+            else:
+                material_status = CheckStatus.FAIL
+            record["checks"]["material_status"] = material_status.value
+            record["checks"]["material_ok"] = (
+                None if material_status == CheckStatus.NOT_EVALUATED
+                else material_status == CheckStatus.PASS
             )
+
+            # Sketches: an UNKNOWN status is never silently treated as
+            # passing — it forces not_evaluated, same as a read failure.
+            has_unknown_sketch = any(s["status"] == "UNKNOWN" for s in sketch_statuses)
+            if had_open_error or sketch_error or has_unknown_sketch:
+                sketches_status = CheckStatus.NOT_EVALUATED
+            elif record["checks"]["underdefined_sketches"]:
+                sketches_status = CheckStatus.FAIL
+            else:
+                sketches_status = CheckStatus.PASS
+            record["checks"]["sketches_status"] = sketches_status.value
             record["checks"]["sketches_ok"] = (
-                len(record["checks"]["underdefined_sketches"]) == 0
+                None if sketches_status == CheckStatus.NOT_EVALUATED
+                else sketches_status == CheckStatus.PASS
             )
 
-            shape_score = record["checks"]["shape_score"] or 0.0
+            # Shape: a None score means IoU could not be computed at all
+            # (e.g. missing scipy) — never coerced to 0.0, which would look
+            # like a genuinely bad match instead of a check that didn't run.
+            raw_shape_score = record["checks"]["shape_score"]
+            if had_open_error or raw_shape_score is None:
+                shape_status = CheckStatus.NOT_EVALUATED
+                shape_score  = None
+            else:
+                shape_score  = min(raw_shape_score, 1.0)
+                shape_status = (CheckStatus.PASS if shape_score >= SHAPE_THRESHOLD
+                                 else CheckStatus.FAIL)
+            record["checks"]["shape_status"] = shape_status.value
+
             record["grade"] = compute_grade(
-                min(shape_score, 1.0),
-                record["checks"]["volume_ok"],
-                record["checks"]["material_ok"],
-                record["checks"]["sketches_ok"],
+                shape_status, shape_score,
+                volume_status, material_status, sketches_status,
             )
 
-            # Flag for review if grade < 85 or any check failed
+            # Flag for review if grade < 85, any check failed outright, or
+            # any check could not be evaluated at all — not_evaluated always
+            # forces review regardless of the numeric total.
             grade_total = record["grade"]["total"]
-            if grade_total < 85 or not record["checks"]["volume_ok"] \
-                    or not record["checks"]["material_ok"] \
-                    or record["checks"]["underdefined_sketches"]:
+            any_not_evaluated = CheckStatus.NOT_EVALUATED in (
+                shape_status, volume_status, material_status, sketches_status
+            )
+            if grade_total < 85 or volume_status == CheckStatus.FAIL \
+                    or material_status == CheckStatus.FAIL \
+                    or sketches_status == CheckStatus.FAIL \
+                    or any_not_evaluated:
                 record["flags"]["needs_review"] = True
 
             # Track authors for plagiarism
@@ -446,16 +573,31 @@ def grade_assignment(
                     author_map[author] = []
                 author_map[author].append(username)
 
+            def _mark(status: CheckStatus) -> str:
+                return {"pass": "OK", "fail": "FAIL", "not_evaluated": "N/E"}[status.value]
+
             elapsed = round(time.monotonic() - t_student, 1)
-            ud = record["checks"]["underdefined_sketches"]
             print(f"  author={record['sw_author']}  "
-                  f"vol={'✓' if record['checks']['volume_ok'] else '✗'}  "
-                  f"mat={'✓' if record['checks']['material_ok'] else '✗'}  "
-                  f"shape={record['checks']['shape_score']}  "
-                  f"sketches={'✓' if not ud else ud}  "
+                  f"vol={_mark(volume_status)}  "
+                  f"mat={_mark(material_status)}  "
+                  f"shape={record['checks']['shape_score']} [{_mark(shape_status)}]  "
+                  f"sketches={_mark(sketches_status)}  "
                   f"grade={grade_total}/100  ({elapsed}s)")
 
             all_results.append(record)
+
+            if progress_callback is not None:
+                try:
+                    progress_callback({
+                        "current": i + 1,
+                        "total": len(student_files),
+                        "filename": filename,
+                        "elapsed_s": round(time.monotonic() - t_start, 1),
+                        "file_seconds": elapsed,
+                    })
+                except Exception as e_cb:
+                    print(f"  ⚠ progress_callback raised: {e_cb}")
+
             import gc; gc.collect()
 
         # -------------------------------------------------------

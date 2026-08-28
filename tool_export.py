@@ -38,6 +38,8 @@ Output schema
 
 from __future__ import annotations
 
+import atexit
+import json
 import logging
 import os
 from pathlib import Path
@@ -46,6 +48,20 @@ from typing import Any
 from sw_connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# SPEC_v0.2 §15.7 — a crash between mutating STL preferences and restoring
+# them leaves the instructor's SolidWorks permanently configured at grading
+# tolerances, affecting their own modelling work afterward. The original
+# values are persisted to disk *before* mutation so a crash can be
+# recovered from on the next launch, and restoration also runs via atexit
+# (not just `finally`) so a hard process kill after the try block still has
+# a chance to restore before the interpreter tears down.
+# ---------------------------------------------------------------------------
+_STL_PREF_BACKUP_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".stl_prefs_backup.json"
+)
+_atexit_registered = False
 
 SUPPORTED_FORMATS = {"STL", "STEP", "IGES"}
 
@@ -73,6 +89,59 @@ _STL_QUALITY_PRESETS = {
 STL_QUALITY = "fine"
 
 
+_current_backup: dict = {"app": None, "deviation": None, "angle": None}
+
+
+def _persist_backup_to_disk(deviation, angle) -> None:
+    try:
+        with open(_STL_PREF_BACKUP_PATH, "w", encoding="utf-8") as f:
+            json.dump({"deviation": deviation, "angle": angle}, f)
+    except Exception as e:
+        logger.debug("Could not persist STL preference backup to disk: %s", e)
+
+
+def _clear_backup_on_disk() -> None:
+    try:
+        if os.path.exists(_STL_PREF_BACKUP_PATH):
+            os.remove(_STL_PREF_BACKUP_PATH)
+    except Exception as e:
+        logger.debug("Could not clear STL preference backup file: %s", e)
+
+
+def _atexit_restore() -> None:
+    b = _current_backup
+    if b["app"] is not None:
+        logger.warning("Process exiting with STL preferences still mutated — restoring via atexit.")
+        _restore_stl_quality(b["app"], b["deviation"], b["angle"])
+
+
+def recover_stl_preferences_if_needed(app) -> bool:
+    """
+    Call once at startup, before any grading (SPEC_v0.2 §15.7). If a backup
+    file exists on disk, a previous run crashed between mutating STL
+    preferences and restoring them, leaving the instructor's SolidWorks
+    misconfigured. Restore now and clear the marker.
+
+    Returns True if a recovery was performed.
+    """
+    if not os.path.exists(_STL_PREF_BACKUP_PATH):
+        return False
+    try:
+        with open(_STL_PREF_BACKUP_PATH, "r", encoding="utf-8") as f:
+            backup = json.load(f)
+        if backup.get("deviation") is not None:
+            app.SetUserPreferenceDoubleValue(_STL_DEVIATION_PREF, backup["deviation"])
+        if backup.get("angle") is not None:
+            app.SetUserPreferenceDoubleValue(_STL_ANGLE_TOL_PREF, backup["angle"])
+        logger.warning("Recovered STL preferences from a previous crashed run: %s", backup)
+        return True
+    except Exception as e:
+        logger.warning("Could not recover STL preferences from backup: %s", e)
+        return False
+    finally:
+        _clear_backup_on_disk()
+
+
 def _set_stl_quality(app, quality: str = STL_QUALITY) -> tuple[float, float]:
     """
     Set SolidWorks STL export resolution preferences.
@@ -88,6 +157,16 @@ def _set_stl_quality(app, quality: str = STL_QUALITY) -> tuple[float, float]:
         prev_angle     = app.GetUserPreferenceDoubleValue(_STL_ANGLE_TOL_PREF)
     except Exception as e:
         logger.debug("Could not read STL preferences: %s", e)
+
+    # Persist the ORIGINAL values to disk before mutating anything, and
+    # arm an atexit restore — both survive a crash between here and the
+    # `finally` block in export_file() (SPEC_v0.2 §15.7).
+    _current_backup.update(app=app, deviation=prev_deviation, angle=prev_angle)
+    _persist_backup_to_disk(prev_deviation, prev_angle)
+    global _atexit_registered
+    if not _atexit_registered:
+        atexit.register(_atexit_restore)
+        _atexit_registered = True
 
     try:
         app.SetUserPreferenceDoubleValue(_STL_DEVIATION_PREF, preset["deviation"])
@@ -109,6 +188,8 @@ def _restore_stl_quality(app, prev_deviation, prev_angle) -> None:
             app.SetUserPreferenceDoubleValue(_STL_DEVIATION_PREF, prev_deviation)
         if prev_angle is not None:
             app.SetUserPreferenceDoubleValue(_STL_ANGLE_TOL_PREF, prev_angle)
+        _current_backup.update(app=None, deviation=None, angle=None)
+        _clear_backup_on_disk()
     except Exception as e:
         logger.debug("Could not restore STL preferences: %s", e)
 

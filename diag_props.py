@@ -11,18 +11,18 @@ import win32com.client
 from popup_dismisser import ensure_dismisser_running
 from sw_connection import get_connection
 
-PATH = r'C:\Users\gce4\Box\ES-19\CADFiles\Listed\0253.SLDPRT'
+import os
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_underdefined.SLDPRT')
 
 ensure_dismisser_running()
 conn = get_connection()
 doc, _ = conn.open_part_silent(PATH)
 
-print("=== SummaryInfo indices 0-20 ===")
+print("=== SummaryInfo indices 0-20 (all, including empty) ===")
 for i in range(21):
     try:
         val = doc.SummaryInfo(i)
-        if val and str(val).strip():
-            print(f"  [{i}] = {repr(val)}")
+        print(f"  [{i}] = {repr(val)}")
     except Exception as e:
         print(f"  [{i}] error: {e}")
 

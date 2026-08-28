@@ -30,7 +30,9 @@ Score interpretation
 Output schema
 -------------
 {
-    "score":         float,        # 0.0–1.0
+    "score":         float | None, # 0.0-1.0, or None if the check could not
+                                    # be evaluated (never a swallowed-exception
+                                    # zero — see SPEC_v0.2 §15.1)
     "method":        str,
     "details":       str,
     "volume_ratio":  float | None, # student_vol / solution_vol (mm³)
@@ -84,7 +86,7 @@ def compare_shapes(
     See module docstring for schema.
     """
     result: dict[str, Any] = {
-        "score": 0.0,
+        "score": None,
         "method": "normalized_pca_iou" if form_only else "raw_iou",
         "details": "",
         "volume_ratio": None,
@@ -142,30 +144,30 @@ def compare_shapes(
             pass
 
         # --- Stage C: Normalize and compare ---
+        # No fallback on failure (SPEC_v0.2 §15.1): a check that could not
+        # run must never produce a number in the score field under a
+        # different method — that field means something else entirely and
+        # callers that don't check `method` would silently misread it.
         try:
             if form_only:
                 iou = _normalized_pca_iou(student_mesh, solution_mesh)
             else:
                 iou = _raw_iou(student_mesh, solution_mesh)
+        except Exception as exc:
+            logger.exception("IoU computation failed")
+            iou = None
+            result["error"] = f"Shape comparison failed: {exc}"
 
+        if iou is None:
+            result["iou_score"] = None
+            result["score"] = None
+            if not result["error"]:
+                result["error"] = "IoU computation could not be evaluated (voxelization failed)."
+            result["details"] = "not evaluated — " + result["error"]
+        else:
             result["iou_score"] = round(iou, 4)
             result["score"]     = round(iou, 4)
             result["details"]   = _describe_result(iou, result["volume_ratio"], form_only)
-
-        except Exception as exc:
-            logger.exception("IoU computation failed")
-            # Fall back to volume-ratio-based score
-            if result["volume_ratio"] is not None:
-                vr = result["volume_ratio"]
-                fallback_score = max(0.0, 1.0 - abs(1.0 - vr))
-                result["score"]  = round(fallback_score, 4)
-                result["method"] = "volume_ratio_fallback"
-                result["details"] = (
-                    f"IoU failed ({exc}); used volume ratio fallback. "
-                    f"volume_ratio={vr:.3f}, score={fallback_score:.3f}"
-                )
-            else:
-                result["error"] = f"Shape comparison failed: {exc}"
 
     return result
 
@@ -174,16 +176,20 @@ def compare_shapes(
 # Normalization + IoU
 # ---------------------------------------------------------------------------
 
-def _normalized_pca_iou(mesh_a, mesh_b) -> float:
+def _normalized_pca_iou(mesh_a, mesh_b) -> float | None:
     """
     Normalize both meshes (center, PCA align, unit scale) then
     compute voxel IoU. Tries all 8 PCA axis-flip combinations
     and returns the best score.
+
+    Returns None (never 0.0) if every flip attempt failed to voxelize —
+    a total failure to compute must not look like a computed score of
+    zero overlap (SPEC_v0.2 §15.1).
     """
     a_norm = _normalize_mesh(mesh_a)
     b_norm = _normalize_mesh(mesh_b)
 
-    best_iou = 0.0
+    best_iou: float | None = None
 
     # Try all 8 sign combinations for PCA axes to handle symmetry ambiguity
     for flips in itertools.product([1, -1], repeat=3):
@@ -191,7 +197,7 @@ def _normalized_pca_iou(mesh_a, mesh_b) -> float:
             b_flipped = b_norm.copy()
             b_flipped.vertices *= np.array(flips)
             iou = _voxel_iou(a_norm, b_flipped, VOXEL_RESOLUTION)
-            if iou > best_iou:
+            if iou is not None and (best_iou is None or iou > best_iou):
                 best_iou = iou
         except Exception:
             pass
@@ -211,13 +217,16 @@ def compare_meshes_normalized(
     Returns
     -------
     (iou, best_flip, alignment_transform)
-      iou               : float 0-1
+      iou               : float 0-1, or None if voxelization failed on
+                          every flip attempt (never a bare 0.0 — that
+                          would be indistinguishable from a real
+                          zero-overlap comparison; SPEC_v0.2 §15.1)
       best_flip         : [int, int, int]  e.g. [1, -1, 1]
-      alignment_transform: list of 16 floats (4x4 row-major identity — 
+      alignment_transform: list of 16 floats (4x4 row-major identity —
                            meshes are already in normalized space, viewer
                            just needs to reproduce the same PCA space)
     """
-    best_iou   = 0.0
+    best_iou: float | None = None
     best_flips = [1, 1, 1]
 
     for flips in itertools.product([1, -1], repeat=3):
@@ -225,7 +234,7 @@ def compare_meshes_normalized(
             b_flipped = stu_norm.copy()
             b_flipped.vertices *= np.array(flips)
             iou = _voxel_iou(sol_norm, b_flipped, voxel_resolution)
-            if iou > best_iou:
+            if iou is not None and (best_iou is None or iou > best_iou):
                 best_iou   = iou
                 best_flips = list(flips)
         except Exception:
@@ -311,10 +320,16 @@ def _normalize_mesh(mesh):
     return m
 
 
-def _voxel_iou(mesh_a, mesh_b, resolution: int) -> float:
+def _voxel_iou(mesh_a, mesh_b, resolution: int) -> float | None:
     """
     Voxelize both meshes at the same resolution and compute
     intersection-over-union of the filled voxel grids.
+
+    Returns None — never 0.0 — when the comparison could not be computed
+    (degenerate geometry, or voxelization/fill failure e.g. missing scipy).
+    A swallowed exception must never look like a computed zero-overlap
+    score (SPEC_v0.2 §15.1 — this is the single most important line in
+    this module).
     """
     # Compute a common pitch that covers both meshes
     extents_a = np.abs(mesh_a.bounding_box.extents)
@@ -323,14 +338,15 @@ def _voxel_iou(mesh_a, mesh_b, resolution: int) -> float:
     pitch = max_extent / resolution
 
     if pitch < 1e-10:
-        return 0.0
+        logger.warning("Voxel pitch degenerate (max_extent=%s) — not evaluated.", max_extent)
+        return None
 
     try:
         vox_a = mesh_a.voxelized(pitch=pitch).fill()
         vox_b = mesh_b.voxelized(pitch=pitch).fill()
     except Exception as exc:
-        logger.debug("Voxelization failed: %s", exc)
-        return 0.0
+        logger.error("Voxelization failed — shape check NOT evaluated: %s", exc)
+        return None
 
     # Convert to dense boolean grids at the same shape
     a_grid = _to_dense(vox_a)
@@ -343,7 +359,8 @@ def _voxel_iou(mesh_a, mesh_b, resolution: int) -> float:
     union        = np.logical_or(a_grid,  b_grid).sum()
 
     if union == 0:
-        return 0.0
+        logger.warning("Voxel union is empty (both grids empty) — not evaluated.")
+        return None
 
     return float(intersection) / float(union)
 

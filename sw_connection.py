@@ -231,32 +231,38 @@ class SolidWorksConnection:
         doc = None
         err = 0
 
-        # Strategy 1: OpenDoc — plain, no suffix. Works on SW Student Edition.
+        # Strategy 1 (SPEC_v0.2 §15.3): OpenDoc6 with Silent|ReadOnly tried
+        # FIRST. Student files must never be opened writable — close_doc()
+        # already refuses save=True on the promise that opens are read-only;
+        # this is what actually keeps that promise. The bare OpenDoc below
+        # is a fallback only, and grade_assignment.py additionally grades a
+        # scratch copy rather than the original (§15.3 point 2).
         try:
-            doc = app.OpenDoc(str(path), SW_DOC_PART)
+            options = SW_OPEN_SILENT | SW_OPEN_READ_ONLY
+            doc = app.OpenDoc6(str(path), SW_DOC_PART, options, "", 0, 0)
             if doc is not None:
-                logger.debug("OpenDoc succeeded for '%s'", path)
+                logger.debug("OpenDoc6 (Silent|ReadOnly) succeeded for '%s'", path)
         except Exception as e1:
-            logger.debug("OpenDoc failed (%s), trying OpenDoc2.", e1)
+            logger.debug("OpenDoc6 failed (%s), trying OpenDoc2.", e1)
 
-        # Strategy 2: OpenDoc2 — no out-params
+        # Strategy 2: OpenDoc2 — no out-params, no read-only flag available.
         if doc is None:
             try:
                 doc = app.OpenDoc2(str(path), SW_DOC_PART)
                 if doc is not None:
                     logger.debug("OpenDoc2 succeeded for '%s'", path)
             except Exception as e2:
-                logger.debug("OpenDoc2 failed (%s), trying OpenDoc6.", e2)
+                logger.debug("OpenDoc2 failed (%s), trying bare OpenDoc.", e2)
 
-        # Strategy 3: OpenDoc6 — explicit options flags
+        # Strategy 3: OpenDoc — plain, no suffix, no read-only flag available.
+        # Last resort before giving up: opens read-write.
         if doc is None:
             try:
-                options = SW_OPEN_SILENT | SW_OPEN_READ_ONLY
-                doc = app.OpenDoc6(str(path), SW_DOC_PART, options, "", 0, 0)
+                doc = app.OpenDoc(str(path), SW_DOC_PART)
                 if doc is not None:
-                    logger.debug("OpenDoc6 succeeded for '%s'", path)
+                    logger.debug("OpenDoc (read-write fallback) succeeded for '%s'", path)
             except Exception as e3:
-                logger.debug("OpenDoc6 failed (%s), checking ActiveDoc.", e3)
+                logger.debug("OpenDoc failed (%s), checking ActiveDoc.", e3)
 
         # Strategy 4: file may already be open — grab the active document
         if doc is None:

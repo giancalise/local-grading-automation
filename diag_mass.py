@@ -8,7 +8,8 @@ pythoncom.CoInitialize()
 from popup_dismisser import ensure_dismisser_running
 from sw_connection import get_connection
 
-PATH = r'C:\Users\gce4\Box\ES-19\CADFiles\Listed\0253.SLDPRT'
+import os
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_underdefined.SLDPRT')
 
 ensure_dismisser_running()
 conn = get_connection()

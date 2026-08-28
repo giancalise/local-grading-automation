@@ -64,59 +64,15 @@ def get_sw():
 
 
 # ---------------------------------------------------------------
-# Helper: get mass properties — tries two API strategies
+# Mass properties: tool_mass._read_mass_properties is the ONE
+# implementation used everywhere (SPEC_v0.2 §14.5). The function that
+# used to live here (get_mass_props) used a different API
+# (CreateMassProperty / GetMassProperties2) and returned volume/area in
+# m³/m² instead of tool_mass's mm³/mm² — two implementations of the same
+# reading, silently disagreeing on units. Deleted; callers below use
+# tool_mass and its units (mm³, mm², kg) instead.
 # ---------------------------------------------------------------
-def get_mass_props(sw, doc):
-    """
-    Try two methods to retrieve mass properties:
-      1. doc.Extension.CreateMassProperty()  — preferred modern API
-      2. sw.GetMassProperties2(path, config, units) — reliable fallback
-    Returns a dict with keys: mass, volume, surface_area (all in SI units)
-    """
-    path = doc.GetPathName
-    log.debug(f"Getting mass properties for: {path}")
-
-    # --- Strategy 1: CreateMassProperty ---
-    log.debug("Strategy 1: doc.Extension.CreateMassProperty()")
-    try:
-        ext = doc.Extension
-        mass_prop = ext.CreateMassProperty()
-        if mass_prop is not None:
-            result = {
-                "mass": round(mass_prop.Mass, 6),
-                "volume": round(mass_prop.Volume, 6),
-                "surface_area": round(mass_prop.SurfaceArea, 6),
-            }
-            log.info(f"Strategy 1 succeeded: {result}")
-            return result
-        else:
-            log.warning("Strategy 1: CreateMassProperty() returned None.")
-    except Exception as e:
-        log.warning(f"Strategy 1 failed: {e}")
-
-    # --- Strategy 2: sw.GetMassProperties2 ---
-    log.debug("Strategy 2: sw.GetMassProperties2(path, config, units)")
-    try:
-        config_mgr = doc.ConfigurationManager
-        active_config = config_mgr.ActiveConfiguration
-        config_name = active_config.Name if active_config else "Default"
-        mp = sw.GetMassProperties2(path, config_name, int(3))
-        if mp is None:
-            log.warning("Strategy 2: GetMassProperties2 returned None.")
-        else:
-            result = {
-                "mass": round(float(mp[5]), 6),
-                "volume": round(float(mp[3]), 6),
-                "surface_area": round(float(mp[4]), 6),
-            }
-            log.info(f"Strategy 2 succeeded: {result}")
-            return result
-    except Exception as e:
-        log.error(f"Strategy 2 failed: {e}")
-
-    raise RuntimeError(
-        "Both mass property strategies failed. Check solidworks_mcp.log for details."
-    )
+from tool_mass import _read_mass_properties as _read_mass_properties_for_server
 
 
 # ---------------------------------------------------------------
@@ -203,7 +159,12 @@ def get_properties() -> str:
         if doc is None:
             return "No active document. Please open a part file in SOLIDWORKS first."
 
-        props = get_mass_props(sw, doc)
+        props = {
+            "mass": None, "volume": None, "surface_area": None,
+            "center_of_mass": None, "density": None,
+            "material_assigned": False, "material_name": None, "error": None,
+        }
+        _read_mass_properties_for_server(doc, props)
 
         try:
             material = doc.MaterialIdName
@@ -229,8 +190,8 @@ def get_properties() -> str:
             f"File: {doc.GetPathName}\n"
             f"Material: {material}\n"
             f"Mass: {props['mass']} kg\n"
-            f"Volume: {props['volume']} m³\n"
-            f"Surface area: {props['surface_area']} m²\n"
+            f"Volume: {props['volume']} mm³\n"
+            f"Surface area: {props['surface_area']} mm²\n"
             f"Custom properties: {custom if custom else 'None'}"
         )
         log.info(f"get_properties result:\n{result}")
@@ -290,11 +251,21 @@ def compare_models(file_path_a: str, file_path_b: str) -> str:
 
         def load_props(path):
             log.debug(f"Loading props for: {path}")
+            # Note: this opens read-write (bare OpenDoc6 with option=1, no
+            # ReadOnly flag) — compare_models is a generic ad-hoc MCP tool
+            # for the instructor's own files, not the grading path, so the
+            # SPEC_v0.2 §15.3 read-only requirement (which is about student
+            # submissions) does not apply here.
             doc = sw.OpenDoc6(path, 1, 1, "", errors, warnings)
             if doc is None:
                 return None, f"Could not open {path}"
             try:
-                mp = get_mass_props(sw, doc)
+                mp = {
+                    "mass": None, "volume": None, "surface_area": None,
+                    "center_of_mass": None, "density": None,
+                    "material_assigned": False, "material_name": None, "error": None,
+                }
+                _read_mass_properties_for_server(doc, mp)
                 pm = doc.Extension.CustomPropertyManager("")
                 names = pm.GetNames() or []
                 custom = {}
@@ -307,8 +278,8 @@ def compare_models(file_path_a: str, file_path_b: str) -> str:
                     "file": path,
                     "material": doc.MaterialIdName or "Not assigned",
                     "mass_kg": mp["mass"],
-                    "volume_m3": mp["volume"],
-                    "surface_area_m2": mp["surface_area"],
+                    "volume_mm3": mp["volume"],
+                    "surface_area_mm2": mp["surface_area"],
                     "custom": custom,
                 }
             finally:
@@ -323,8 +294,8 @@ def compare_models(file_path_a: str, file_path_b: str) -> str:
             return err_b
 
         lines = ["=== Model Comparison ===\n"]
-        fields = ["material", "mass_kg", "volume_m3", "surface_area_m2"]
-        labels = ["Material", "Mass (kg)", "Volume (m³)", "Surface area (m²)"]
+        fields = ["material", "mass_kg", "volume_mm3", "surface_area_mm2"]
+        labels = ["Material", "Mass (kg)", "Volume (mm³)", "Surface area (mm²)"]
 
         for field, label in zip(fields, labels):
             a_val = props_a[field]
@@ -497,9 +468,21 @@ def grading_batch(
     Run all grading checks against a single .sldprt file in one pass.
 
     Opens the file once, reads metadata + mass properties + sketch status
-    in parallel, then closes it. Shape comparison (which requires STL export)
-    runs as a separate step. This is significantly faster than calling each
-    grading tool individually.
+    sequentially, then closes it. Shape comparison (which requires STL
+    export) runs as a separate step.
+
+    SPEC_v0.2 §15.5: this used to spawn a thread per check, all calling
+    methods on the same raw COM document pointer with no CoInitialize on
+    those threads and the docstring's claim that this was "safe to
+    parallelize" was wrong — SolidWorks' COM interface is a single-threaded
+    apartment server; a dispatch pointer used from a foreign thread without
+    marshalling raises RPC_E_WRONGTHREAD, and each thread's
+    `join(timeout=30)` returning on a timeout meant the code went on to read
+    a partially-populated (but truthy) result dict as if it were complete.
+    This is now the sequential version — the one that was actually correct,
+    previously living only in server_additions.py. All COM in this
+    function runs on the calling thread; the only parallelism this module
+    should ever have is downstream of STL export (pure Python, no COM).
 
     Parameters
     ----------
@@ -511,7 +494,6 @@ def grading_batch(
     check_sketches    : include sketch fully-defined status check
     """
     import time
-    import threading
     from pathlib import Path
     from sw_connection import get_connection
     from tool_metadata import _read_summary_properties, _read_custom_properties, _filter_identity
@@ -537,19 +519,13 @@ def grading_batch(
         return result
 
     conn = None
+    doc = None
     try:
         conn = get_connection()
         doc, _ = conn.open_part_silent(str(path))
         doc.ForceRebuild3(False)
 
-        # --- Run metadata, mass, and sketch reads in parallel threads ---
-        # These are all read-only calls on an already-open document, safe to parallelize.
-        meta_result   = {}
-        mass_result   = {}
-        sketch_result = {}
-        errors        = {}
-
-        def read_metadata():
+        if check_metadata:
             try:
                 meta = {
                     "last_saved_by": None, "author": None,
@@ -561,64 +537,43 @@ def grading_batch(
                 meta["raw_identity_properties"] = _filter_identity(meta["custom_properties"])
                 if meta["author"]:
                     meta["raw_identity_properties"].setdefault("Author", meta["author"])
-                meta_result.update(meta)
+                result["metadata"] = meta
             except Exception as e:
-                meta_result["error"] = str(e)
+                result["metadata"] = {"error": str(e)}
 
-        def read_mass():
+        if check_mass:
             try:
                 mass = {
                     "mass": None, "volume": None, "surface_area": None,
                     "center_of_mass": None, "density": None,
                     "material_assigned": False, "material_name": None, "error": None,
                 }
+                doc.ForceRebuild3(False)
                 _read_mass_properties(doc, mass)
                 _read_material(doc, mass)
-                mass_result.update(mass)
+                result["mass_properties"] = mass
             except Exception as e:
-                mass_result["error"] = str(e)
+                result["mass_properties"] = {"error": str(e)}
 
-        def read_sketches():
+        if check_sketches:
             try:
                 sketches = _read_sketch_statuses(doc)
                 underdefined = [s for s in sketches if s["status"] == "UNDERDEFINED"]
-                sketch_result.update({
+                result["sketch_status"] = {
                     "underdefined_count": len(underdefined),
                     "underdefined_sketch_names": [s["name"] for s in underdefined],
                     "all_sketches": sketches,
                     "method": "dispid_probe",
                     "error": None,
-                })
+                }
             except Exception as e:
-                sketch_result["error"] = str(e)
-
-        # Build thread list based on requested checks
-        threads = []
-        if check_metadata:
-            threads.append(threading.Thread(target=read_metadata, daemon=True))
-        if check_mass:
-            threads.append(threading.Thread(target=read_mass, daemon=True))
-        if check_sketches:
-            threads.append(threading.Thread(target=read_sketches, daemon=True))
-
-        # Start all threads and wait
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        if check_metadata:
-            result["metadata"] = meta_result or {"error": "no data returned"}
-        if check_mass:
-            result["mass_properties"] = mass_result or {"error": "no data returned"}
-        if check_sketches:
-            result["sketch_status"] = sketch_result or {"error": "no data returned"}
+                result["sketch_status"] = {"error": str(e)}
 
     except Exception as e:
         log.exception("grading_batch open/read failed for '%s'", filepath)
         result["error"] = str(e)
     finally:
-        if conn is not None:
+        if conn is not None and doc is not None:
             try:
                 conn.close_doc(str(path))
             except Exception as e:
