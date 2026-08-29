@@ -10,6 +10,7 @@ __pycache__/
 dist/
 build/
 *.spec
+*.lnk
 
 # Runtime state
 .stl_prefs_backup.json

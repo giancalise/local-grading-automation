@@ -22,6 +22,7 @@ import atexit
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -157,38 +158,96 @@ def api_launch_sw():
 # ---------------------------------------------------------------------------
 # Native folder/file pickers — a browser <input type=file> cannot return a
 # server-side absolute path, and this app has no upload step (student
-# files never leave the local filesystem). tkinter's native dialogs run
-# server-side and hand back a real path.
+# files never leave the local filesystem). tkinter's native dialogs hand
+# back a real path.
+#
+# These run in a completely separate, freshly-started process (this same
+# program, re-invoked with a hidden flag), not inline inside a Flask
+# request thread. Tkinter's underlying Tcl interpreter expects to own the
+# thread it runs on; a Flask dev server with threaded=True hands each
+# request to a new worker thread, and creating a Tk window there is
+# unreliable on Windows — it can open off-screen/behind other windows or
+# simply never respond. A fresh child process sidesteps this entirely: it
+# gets its own real main thread with nothing else competing for it.
 # ---------------------------------------------------------------------------
 
-def _native_dialog(kind: str, **kwargs) -> str | None:
+_DIALOG_FOLDER_FLAG = "--internal-pick-folder"
+_DIALOG_FILE_FLAG = "--internal-pick-file"
+
+
+def _run_dialog_subprocess(flag: str) -> str | None:
+    # Hand back the result via a temp file rather than stdout: a
+    # --noconsole-built frozen exe has no reliable stdout stream even when
+    # re-invoked as a subprocess, but a real file on disk works the same
+    # way regardless of console/frozen state.
+    import tempfile
+    result_path = tempfile.mktemp(prefix="solidgrade_dialog_", suffix=".txt")
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, flag, result_path]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), flag, result_path]
+
+    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    try:
+        subprocess.run(cmd, timeout=300, creationflags=creationflags)
+        if os.path.exists(result_path):
+            with open(result_path, "r", encoding="utf-8") as f:
+                path = f.read().strip()
+            return path or None
+        return None
+    except Exception:
+        return None
+    finally:
+        try:
+            if os.path.exists(result_path):
+                os.remove(result_path)
+        except Exception:
+            pass
+
+
+def _native_dialog(kind: str) -> str | None:
+    flag = _DIALOG_FOLDER_FLAG if kind == "folder" else _DIALOG_FILE_FLAG
+    return _run_dialog_subprocess(flag)
+
+
+def _dialog_worker_main(result_path: str) -> None:
+    """
+    Entry point when this program is re-invoked with one of the internal
+    dialog flags. Runs exactly one native dialog on this fresh process's
+    main thread and writes the chosen path (or nothing, if cancelled) to
+    result_path. Never starts Flask, never runs the self-test.
+    """
     import tkinter as tk
     from tkinter import filedialog
+
     root = tk.Tk()
     root.withdraw()
     root.wm_attributes("-topmost", 1)
+    root.update()  # force the topmost/withdraw state to actually apply before the dialog opens
     try:
-        if kind == "folder":
-            path = filedialog.askdirectory(**kwargs)
+        if _DIALOG_FOLDER_FLAG in sys.argv:
+            path = filedialog.askdirectory(title="Select folder of student .SLDPRT files")
         else:
-            path = filedialog.askopenfilename(**kwargs)
+            path = filedialog.askopenfilename(
+                title="Select solution .SLDPRT file",
+                filetypes=[("SolidWorks Part", "*.SLDPRT *.sldprt"), ("All files", "*.*")],
+            )
     finally:
         root.destroy()
-    return path or None
+    with open(result_path, "w", encoding="utf-8") as f:
+        f.write(path or "")
 
 
 @app.route("/api/pick_folder", methods=["POST"])
 def api_pick_folder():
-    path = _native_dialog("folder", title="Select folder of student .SLDPRT files")
+    path = _native_dialog("folder")
     return jsonify({"path": path})
 
 
 @app.route("/api/pick_file", methods=["POST"])
 def api_pick_file():
-    path = _native_dialog(
-        "file", title="Select solution .SLDPRT file",
-        filetypes=[("SolidWorks Part", "*.SLDPRT *.sldprt"), ("All files", "*.*")],
-    )
+    path = _native_dialog("file")
     return jsonify({"path": path})
 
 
@@ -531,4 +590,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if _DIALOG_FOLDER_FLAG in sys.argv or _DIALOG_FILE_FLAG in sys.argv:
+        # Re-invoked by _run_dialog_subprocess() to show exactly one native
+        # dialog in a clean process and exit — never starts Flask or the
+        # self-test. The result path is the last command-line argument.
+        _dialog_worker_main(sys.argv[-1])
+    else:
+        main()
