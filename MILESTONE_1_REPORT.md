@@ -169,14 +169,72 @@ Across this session's ~10 launch/kill cycles of SolidWorks (necessary for testin
 
 ---
 
+## Post-milestone: first real-user testing (2026-08-28 to 2026-08-31)
+
+The instructor tried running the packaged app on their own, without a Claude Code
+session driving it. Three things came out of that, documented here because they
+change what Milestone 2 should prioritize.
+
+1. **No double-click launcher existed.** The milestone deliverable was a built
+   `.exe` sitting in `dist/SolidGradeDesktop/`, reachable only by knowing that
+   path. Fixed by creating Windows shortcuts (one on the Desktop, one in the
+   repo root, both named "SolidGrade Desktop") pointing at the frozen exe. Not
+   a code change — a packaging/delivery gap. Milestone 2 should build a real
+   installer or at least ship the shortcut as part of the deliverable rather
+   than relying on a human to create one after the fact.
+2. **A real, live bug: the native file/folder pickers hung.** Root cause:
+   `_native_dialog()` created a `tkinter.Tk()` window directly inside a Flask
+   request-handling thread. Tkinter expects to own the thread it runs on;
+   Flask's `threaded=True` hands each request to a fresh worker thread, and a
+   Tk window created there is unreliable on Windows — it can open off-screen,
+   open behind other windows, or simply never respond, which is exactly what
+   the instructor saw ("very laggy... unable to finish the process").
+   **Fixed and verified live** (commit `a57befd`): each dialog now runs in a
+   completely separate child process (the app re-invoking itself with a
+   hidden flag) that does nothing but show one dialog and exit, handing the
+   chosen path back via a temp file. Confirmed working on both the dev server
+   and a rebuilt frozen exe — the dialog opens as a real, responsive window
+   and the API returns promptly whether the user picks a path or cancels.
+3. **Not yet fixed — flagged as a new top priority: refreshing the browser
+   page loses the running app**, and the instructor independently proposed
+   the app should be its own real window rather than a browser tab. Root
+   cause not yet diagnosed — candidates include the background server
+   actually exiting, or the browser simply losing track of which port it's
+   on. This needs investigation, not a guessed fix. See item 1 below.
+4. **A new requirement surfaced: the desktop app's real screens (Milestone 2+)
+   should match the look, feel, and navigation of an existing SolidGrade web
+   app the instructor already has**, not invent a new design. This needs the
+   web app's actual source (or at minimum a live URL) to do properly — see
+   item 2 below and `NEXT_SESSION_PROMPT.md`.
+
+---
+
 ## What Milestone 2 should be
 
-Ordered by what most directly follows from what this session found:
+Ordered by what most directly follows from what this session found. Items 1–2
+are new, from the post-milestone testing above; items 3–9 were the original
+list written at the end of the milestone build itself.
 
-1. **Fix `sw_timeout.py` for real, then wire up §11.3.** This is now the single highest-value piece of unfinished correctness work — a genuine COM stall (not the self-inflicted kind found this session) still hangs the app forever with no recovery. Two credible designs: (a) proper COM marshaling of the connection object across the timeout-watcher thread boundary, or (b) restructure the "timeout" as a watchdog thread that never touches the COM object itself, only kills the SolidWorks *process* if a call exceeds its budget, and lets `recover_from_stall`/`get_connection()`'s existing dead-connection detection handle the rest. Verify (a) or (b) against live SolidWorks before considering it done — do not trust static review here, per this session's own experience.
-2. **A real multi-student, multi-minute run against actual (or realistic synthetic) student files**, to (a) exercise the R-7 degradation question with real data on real hardware, since this session only ever graded one file at a time, and (b) shake out anything that only shows up under sustained load (leaked documents, the SolidWorks-slowdown pattern Discovery measured).
-3. **§9 ingestion and attribution** — still entirely unbuilt, and the spec calls it "the largest and highest-risk new subsystem." Nothing in this milestone touched it (by design).
-4. **§11.1 checkpointing** — small, and unblocks safely testing longer runs (item 2 above) without losing everything to a crash mid-run.
-5. **A dedicated COM worker thread/queue for the whole app**, rather than letting Flask's request threads and the grading background thread each independently touch SolidWorks (mitigated this session with a single global lock, which works but serializes everything through lock contention rather than through an actual owned-thread design). The `_com_lock` fix in `app.py` is adequate for a single-run walking skeleton; it is not the right long-term architecture once checkpointing/resume or concurrent status-while-grading UX matters more.
-6. **Surface `popup_dismisser`'s new `dismissal_count` and `check_integrity_parity()` in the System Ready indicator** (§15.6 point 2's "alert if a file open exceeds N seconds with zero dismissals" signature) — both were built this session but not wired into the Step 5 UI, since Step 5 was scoped to the minimum viable screen.
-7. **Re-run the §16.2 validation pass's remaining pieces** (`diag_export.py`) on this edition — `diag_props.py`, `diag_mass.py`, and the sketch probe were all exercised this session; STL export API specifics were exercised indirectly (via `tool_export.py`, which worked throughout) but not via the dedicated diagnostic script.
+1. **Diagnose and fix "refreshing the browser loses the app," and decide:
+   browser tab vs. a real standalone application window.** Find out first
+   whether the background server is actually crashing/exiting or whether this
+   is purely a browser/tab-tracking problem — don't guess. Given the
+   instructor independently asked for "its own window, not in a browser,"
+   seriously evaluate switching the UI layer to a real native window (e.g. a
+   webview-based shell) instead of "open localhost in the default browser."
+   That would both solve this bug structurally (no browser tab to lose) and
+   move the app closer to feeling like installed software, which is also
+   what item 4 above and `NEXT_SESSION_PROMPT.md` are asking for.
+2. **Build the real UI, styled to match the existing SolidGrade web app** —
+   once a design/feature reference for that web app exists (see
+   `NEXT_SESSION_PROMPT.md` for the recommended discovery pass that should
+   happen first). This is where §5 home, §10 wizard, §12 results view, and
+   §3 status actually get built with real design, replacing the
+   deliberately-plain Step 5 screen from this milestone.
+3. **Fix `sw_timeout.py` for real, then wire up §11.3.** This is the single highest-value piece of unfinished correctness work — a genuine COM stall (not the self-inflicted kind found this session) still hangs the app forever with no recovery. Two credible designs: (a) proper COM marshaling of the connection object across the timeout-watcher thread boundary, or (b) restructure the "timeout" as a watchdog thread that never touches the COM object itself, only kills the SolidWorks *process* if a call exceeds its budget, and lets `recover_from_stall`/`get_connection()`'s existing dead-connection detection handle the rest. Verify (a) or (b) against live SolidWorks before considering it done — do not trust static review here, per this session's own experience.
+4. **A real multi-student, multi-minute run against actual (or realistic synthetic) student files**, to (a) exercise the R-7 degradation question with real data on real hardware, since this session only ever graded one file at a time, and (b) shake out anything that only shows up under sustained load (leaked documents, the SolidWorks-slowdown pattern Discovery measured).
+5. **§9 ingestion and attribution** — still entirely unbuilt, and the spec calls it "the largest and highest-risk new subsystem." Nothing in this milestone touched it (by design).
+6. **§11.1 checkpointing** — small, and unblocks safely testing longer runs (item 4 above) without losing everything to a crash mid-run.
+7. **A dedicated COM worker thread/queue for the whole app**, rather than letting Flask's request threads and the grading background thread each independently touch SolidWorks (mitigated this session with a single global lock, which works but serializes everything through lock contention rather than through an actual owned-thread design). The `_com_lock` fix in `app.py` is adequate for a single-run walking skeleton; it is not the right long-term architecture once checkpointing/resume or concurrent status-while-grading UX matters more.
+8. **Surface `popup_dismisser`'s new `dismissal_count` and `check_integrity_parity()` in the System Ready indicator** (§15.6 point 2's "alert if a file open exceeds N seconds with zero dismissals" signature) — both were built this session but not wired into the Step 5 UI, since Step 5 was scoped to the minimum viable screen.
+9. **Re-run the §16.2 validation pass's remaining pieces** (`diag_export.py`) on this edition — `diag_props.py`, `diag_mass.py`, and the sketch probe were all exercised this session; STL export API specifics were exercised indirectly (via `tool_export.py`, which worked throughout) but not via the dedicated diagnostic script.
