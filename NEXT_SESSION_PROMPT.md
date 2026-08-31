@@ -1,25 +1,41 @@
-# Next Session — Milestone 3 Kickoff
+# Next Session — Milestone 4 Kickoff
 
-**Written:** 2026-08-31, at the end of the Milestone 2 session (the real UI).
-That session produced `MILESTONE_2_REPORT.md`, the `ui/` folder, the webview
-shell, and a rebuilt `dist/SolidGradeDesktop2`.
+**Updated:** 2026-08-31, at the end of the Milestone 3 session (results depth).
+That session produced `MILESTONE_3_REPORT.md`, the per-student detail panel, the
+§12.6 row actions, and the `source_path` / `students_folder` prerequisite.
+It did **not** rebuild the frozen app — see item 1 and the standing items.
 
-**Previous contents of this file** (the Milestone 2 kickoff) are superseded —
-that session is done.
+Item 1 below is done; items 2–4 are unchanged and still only *proposed*. A new
+**item 0** was found during Milestone 3 and needs a decision.
 
 **Status going in:** the instructor has run a full grading job from the Desktop
-shortcut, through the new app shell, start to finish, successfully. That closes
-the last thing Milestone 1 left unverified.
+shortcut, through the app shell, start to finish, successfully. The Desktop
+shortcut still runs the Milestone 2 build.
 
 ---
 
 ## The priority list, as agreed 2026-08-31
 
-Ordered. Items 1 and the open/reveal decision inside it were chosen by the
-instructor this session; the ordering of 2–4 is **proposed, not yet agreed** —
-confirm before starting anything below item 1.
+Ordered. Item 1 and the open/reveal decision inside it were chosen by the
+instructor; the ordering of 2–4 is **proposed, not yet agreed** — confirm before
+starting any of them. Milestone 3 added an unnumbered **item 0** further down,
+which is a correctness decision rather than a feature.
 
-### 1. Results depth — **AGREED as the first thing to build**
+### 1. Results depth — **BUILT, Milestone 3 (2026-08-31). See `MILESTONE_3_REPORT.md`.**
+
+> Delivered in full: the `source_path` / `students_folder` prerequisite, the
+> seven-card per-student detail panel (including the volume-coupled boost
+> explanation and the underdefined sketch names), both chosen row actions, no
+> "save a copy", and a `locate_sources` action so results graded before the
+> change are not permanently inert. 36 API/§15.3 checks and 16 Milestone 2
+> regression checks pass. **The frozen build was NOT rebuilt** — a
+> `SolidGradeDesktop2.exe` holding a completed 26-student run was running, so
+> the Desktop shortcut still launches Milestone 2 code. Rebuild with
+> `pyinstaller --noconfirm SolidGradeDesktop2.spec` after closing the app.
+>
+> The original specification is kept below for reference.
+
+
 
 The results table currently shows a verdict glyph per check and nothing behind
 it. Everything below is *already in the result JSON* and simply unsurfaced, so
@@ -134,6 +150,36 @@ cheaper. **Do not pick by default — this one touches the web app.**
 
 ---
 
+## New, from Milestone 3 — decide before item 2
+
+### 0. `sw_connection.py`'s open flags are wrong; §15.3 point 1 has never run
+
+Found and measured live in Milestone 3 (`MILESTONE_3_REPORT.md` §3.1). Not a
+regression — it predates every milestone.
+
+`SW_OPEN_SILENT = 2` and `SW_OPEN_READ_ONLY = 32` are both mislabelled: in
+`swOpenDocOptions_e`, `Silent` is 1 and `ReadOnly` is 2 (32 is
+`AutoMissingConfig`). Worse, `open_part_silent()`'s strategy 1 passes the two
+`[out]` parameters of `OpenDoc6` as plain `0, 0`, which fails with **"Type
+mismatch"** under late binding — so every grading open falls through
+`OpenDoc2` to the bare read-write `OpenDoc`, and `IsOpenedReadOnly` is
+**False**. SPEC §15.3 point 1 is written into the code and has never executed.
+
+**Student files are still safe** — §15.3 point 2 (grade a filesystem-read-only
+scratch copy, never the original) is what has been holding, which is why every
+hash and mtime check has passed. The defence in depth is missing; the
+load-bearing defence is intact.
+
+The fix is known and already proven working in `app.py`'s new endpoint:
+`SW_OPEN_SILENT = 1`, `SW_OPEN_READ_ONLY = 2`, and BYREF `VARIANT`s for
+Errors/Warnings. It was **not applied** because it changes the live-verified
+grading path (`ReadOnly|AutoMissingConfig` → `Silent|ReadOnly`, and a genuinely
+read-only open must be re-proven not to break the `SaveAs`-based STL export) and
+needs a full grading run to verify. **This is a judgement call for the
+instructor: fix it first, or leave it and rely on the scratch copy.**
+
+---
+
 ## Standing items, not displaced by the above
 
 - **§11.3 `sw_timeout` stall recovery.** Still unbuilt, still the sharpest pure
@@ -152,6 +198,16 @@ cheaper. **Do not pick by default — this one touches the web app.**
 - **Packaging traps** — three stale `.spec` files lack the Milestone 2
   `datas`/`hiddenimports`, and `.gitignore` excludes `*.spec` entirely, so the
   packaging fix is untracked and a fresh clone cannot build a working app.
+- **Rebuild the frozen app.** Milestone 3's work is in the source tree only; the
+  Desktop shortcut still runs the Milestone 2 build. See above.
+- **Three grading outputs are committed to git** (`output/Quiz3_grades.json`,
+  `output/Quiz3_grades.csv`, `output/MT26_grades.xlsx`) and carry student names
+  and grades. `output/` is now git-ignored so nothing new joins them, but
+  removing those three from the working tree or from history is the
+  instructor's call.
+- **`print("⚠ …")` kills a whole grading run when stdout is not UTF-8** — only
+  when running from source without `PYTHONIOENCODING=utf-8`; the frozen app
+  opens its log as UTF-8 and is unaffected. `MILESTONE_3_REPORT.md` §3.3.
 - **Surface `popup_dismisser`'s `dismissal_count` / `check_integrity_parity()`**
   in the System Ready panel (Milestone 1 item 8, built but never wired up).
 - **§7.2 ⑦** — the installer / SOLIDWORKS-path prompt / account login gap
@@ -162,13 +218,21 @@ cheaper. **Do not pick by default — this one touches the web app.**
 
 ## What must not regress
 
-Re-verify anything a change could plausibly touch. All of these were verified
-live in Milestone 2 against the frozen `.exe`:
+Re-verify anything a change could plausibly touch. These were verified live in
+Milestone 2 against the frozen `.exe`, and re-verified in Milestone 3 against the
+source tree (`MILESTONE_3_REPORT.md` §2):
 
 - **§15.3** student files byte-identical across a run, mtime untouched
   (`test_underdefined.SLDPRT` = `899c98038d1ee227b2d12d7194f0e2cb7c86148d9baeb4453c1776b264ef995f`).
-  **Item 1 opens student files in SOLIDWORKS — this is exactly the invariant it
-  could break. Opens must stay read-only and must be hash-checked after.**
+  **The results view now opens student files in SOLIDWORKS.** That open is
+  read-only by construction, asks SOLIDWORKS to confirm it (`IsOpenedReadOnly`),
+  refuses rather than falling back to a writable mode, and hashes the file either
+  side of every open. Do not add a read-write fallback, and do not add a "save a
+  copy" action (§12.6 / §13 forbid it).
+- **The row-action endpoints must stay scoped to the loaded result's own files.**
+  `/api/open_in_solidworks`, `/api/reveal_file` and `/api/locate_sources` refuse
+  any path that is not a `source_path` in the loaded result or its solution.
+  Widening that turns them into a general file-launching primitive.
 - **§15.1** three-state checks return `null`, never `0`, on genuine failure, and
   never render as `0`.
 - The status check must not launch SOLIDWORKS as a side effect —
@@ -186,37 +250,25 @@ live in Milestone 2 against the frozen `.exe`:
 
 ## The prompt
 
-> Claude Code Session — SolidGrade Desktop, Milestone 3: results depth
+> Claude Code Session — SolidGrade Desktop, Milestone 4
 >
-> Read `MILESTONE_2_REPORT.md` first (what exists, what was verified live, and
-> the §5 data-loss postmortem), then `NEXT_SESSION_PROMPT.md` for the agreed
-> priority list, then the relevant parts of `SOLIDGRADE_WEB_REFERENCE.md` (§3
-> component patterns, §3.6 modals, §12 in the SPEC) and
-> `SPEC_v0.2_SolidGrade_Desktop.md` §12.
+> Read `MILESTONE_3_REPORT.md` first (what shipped, what was verified live, and
+> §3.1 — the `sw_connection.py` open-flag finding), then this file for the
+> priority list, then `MILESTONE_2_REPORT.md` for the earlier context.
 >
-> Build item 1 — results depth — as specified in `NEXT_SESSION_PROMPT.md`:
-> the per-student detail view over data already in the result JSON, plus the two
-> row actions the instructor chose (Open in SOLIDWORKS read-only, Reveal in File
-> Explorer) and explicitly *not* a third (no "save a copy" — §12.6 FERPA).
-> Do the `source_path` / `students_folder` prerequisite first.
+> Item 1 (results depth) is built. **Confirm with me before starting anything
+> else** — the ordering of items 2–4 is still proposed, not agreed, and
+> Milestone 3 added a new item 0 (the `sw_connection.py` open flags) that is a
+> correctness question, not a feature, and needs a decision rather than a
+> default.
 >
-> Style everything per `SOLIDGRADE_WEB_REFERENCE.md`, reusing the tokens and
-> component classes already in `ui/styles.css` rather than inventing new ones,
-> and keep the accessibility standard Milestone 2 set (real focus rings, real
-> dialogs with focus trapping and Escape, no colour-only status encoding,
-> aria-labels on icon-only controls).
+> Two things are worth doing regardless of what we pick, and are quick:
+> rebuild the frozen app so the Desktop shortcut runs current code, and decide
+> what to do about the three committed grading outputs in `output/`.
 >
-> Reuse the existing Flask endpoints. Adding an endpoint for opening/revealing a
-> file is expected; redesigning the existing surface is not.
->
-> Do not regress what Milestone 2 verified live — the list is in
-> `NEXT_SESSION_PROMPT.md` under "What must not regress". **Opening student
-> files in SOLIDWORKS is the specific risk this session introduces to §15.3:
-> hash every student file before and after, and prove opens stay read-only.**
->
-> Confirm the ordering of items 2–4 with me before starting any of them.
-
----
+> Do not regress what Milestones 2 and 3 verified live — the list is under
+> "What must not regress" below, and `MILESTONE_3_REPORT.md` §2 has the
+> §15.3 evidence and the two test scripts' coverage.
 
 ## Note for whoever writes the next one
 

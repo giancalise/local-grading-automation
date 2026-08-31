@@ -29,9 +29,17 @@ Milestone 2 changed three things about how this file is shaped:
    use for: /api/validate_paths, /api/override, /api/export_csv. Every
    pre-existing endpoint kept its exact request and response shape.
 
+Milestone 3 added §12.6's inline row actions on top of the same rule —
+three more additive endpoints (/api/open_in_solidworks, /api/reveal_file,
+/api/locate_sources) and no change to any existing one. §12.6 gated the
+SOLIDWORKS open on §15.3 landing; it has landed and was re-verified live
+in Milestone 2, so the open is unblocked, and it is written to keep that
+invariant rather than assume it. There is deliberately NO "save a copy"
+action: §12.6 and §13 both forbid caching student files.
+
 Still out of scope and deliberately unbuilt: §9 ingestion/attribution,
 assignment/roster models, §11.1 checkpointing, thumbnails, the
-24-permutation search, and §12.6's inline SolidWorks actions.
+24-permutation search, and multi-part assignments.
 """
 
 from __future__ import annotations
@@ -669,6 +677,396 @@ def api_export_csv():
         return jsonify({"error": str(exc)}), 500
 
     return jsonify({"path": path})
+
+
+# ---------------------------------------------------------------------------
+# Inline SOLIDWORKS / Explorer actions on a result row — SPEC_v0.2 §12.6
+# ---------------------------------------------------------------------------
+#
+# §12.6 asks for two things and forbids a third:
+#
+#   * Open the submission (or the solution) in SOLIDWORKS, on demand,
+#     "implemented by storing the absolute source path in the result record"
+#     — which is what grade_assignment.py's new `source_path` /
+#     `students_folder` fields now do — "with a graceful 'file moved'
+#     message."
+#   * Reveal the file where it actually lives.
+#   * NO cached copies. §12.6's own words: that "multiplies the FERPA
+#     surface for no functional gain", and §13 lists student submissions
+#     under "Never stored". There is deliberately no "save a copy" action
+#     here, and one must not be added quietly.
+#
+# §12.6 also said the SOLIDWORKS open "is only safe once §15.3 lands".
+# §15.3 has landed (verified live in Milestone 2: student files stay
+# byte-identical across a run, mtime untouched), so this is unblocked —
+# but only if the open itself keeps that invariant, which is the whole
+# design of _open_readonly_in_solidworks below.
+
+def _file_fingerprint(path: str) -> dict | None:
+    """(sha256, size, mtime_ns) of a file, or None if it cannot be read."""
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        st = os.stat(path)
+        return {"sha256": h.hexdigest(), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        return None
+
+
+def _norm(p: str) -> str:
+    return os.path.normcase(os.path.abspath(p))
+
+
+def _authorized_paths() -> set:
+    """
+    The set of files a row action is allowed to touch: every student's
+    source_path in the loaded result, plus the solution.
+
+    These endpoints take a path from the page, and a path from a client is
+    a path from outside. Even on a loopback-only desktop server (§1.4), an
+    endpoint that opens or reveals ANY path the caller names is a general
+    file-launching primitive; one that only acts on files the loaded result
+    already refers to is the feature that was actually asked for. Cheap to
+    constrain, so constrain it.
+    """
+    with _run_lock:
+        result = _state["run"].get("result") or {}
+        students = result.get("students") or []
+        allowed = {_norm(s["source_path"]) for s in students if s.get("source_path")}
+        sol = (result.get("solution") or {}).get("file")
+    if sol:
+        allowed.add(_norm(sol))
+    return allowed
+
+
+def _resolve_row_target(data: dict):
+    """
+    Validate a row-action path. Returns (path, error_response).
+
+    The three failure modes are kept distinct on purpose: not-in-this-run
+    is a bug or a stale page, missing-file is §12.6's "file moved" case and
+    is the one the instructor will actually hit, and no-path-recorded is
+    the pre-Milestone-3 result that never stored one.
+    """
+    raw = (data or {}).get("path")
+    if not raw:
+        return None, (jsonify({
+            "error": "This result has no recorded path for that file.",
+            "reason": "no_path",
+        }), 400)
+
+    if _norm(raw) not in _authorized_paths():
+        return None, (jsonify({
+            "error": "That file is not part of the loaded results.",
+            "reason": "not_in_run",
+        }), 403)
+
+    if not os.path.isfile(raw):
+        # §12.6's graceful "file moved" path. The submission was never
+        # copied (§13), so a moved or deleted original is a normal state,
+        # not a crash.
+        return None, (jsonify({
+            "error": "The file is no longer at " + raw + ". It may have been moved, "
+                     "renamed or deleted since this run was graded.",
+            "reason": "file_moved",
+            "path": raw,
+        }), 404)
+
+    return os.path.abspath(raw), None
+
+
+@app.route("/api/reveal_file", methods=["POST"])
+def api_reveal_file():
+    """
+    Show the file in File Explorer with it selected. No COM, no SOLIDWORKS,
+    nothing opened — the cheapest half of §12.6.
+    """
+    path, err = _resolve_row_target(request.get_json(force=True) or {})
+    if err:
+        return err
+
+    try:
+        # Passed as a COMMAND STRING, not an argument list, and deliberately.
+        # A list goes through subprocess.list2cmdline, which quotes the whole
+        # "/select,C:\Some Folder\part.SLDPRT" token when the path contains a
+        # space — and explorer.exe does not accept that form, so it silently
+        # opens the wrong window. The documented form is
+        # `explorer /select,"<path>"`, which is what this builds. The path is
+        # not attacker-controlled: _resolve_row_target has already checked it
+        # against the loaded result's own files.
+        #
+        # explorer.exe also returns exit code 1 even on success, so its
+        # return code is not a result — only a failure to spawn it at all is.
+        subprocess.Popen('explorer /select,"' + os.path.normpath(path) + '"', close_fds=True)
+    except Exception as exc:
+        return jsonify({"error": "Could not open File Explorer: " + str(exc)}), 500
+
+    return jsonify({"revealed": path})
+
+
+def _open_readonly_in_solidworks(path: str) -> dict:
+    """
+    Open one part in the RUNNING SOLIDWORKS, visible, read-only.
+
+    Three things about this are deliberate and load-bearing.
+
+    1. **Its own COM attach, on this thread.** It does not touch
+       sw_connection's shared singleton. That object was created on
+       whichever thread first needed it (usually the grading thread), and
+       reaching into a raw dispatch pointer from a Flask request thread is
+       the exact single-threaded-apartment hazard §15.5 describes —
+       Milestone 1 proved it corrupts the connection. A fresh
+       CoInitialize + GetActiveObject on the calling thread gets a properly
+       marshaled proxy of its own, which is the same pattern
+       sw_detect.is_running() already uses safely from request threads.
+
+    2. **GetActiveObject, never Dispatch.** Clicking "open this student's
+       file" must not become a way to launch SOLIDWORKS. If it is not
+       running, that is an error the instructor resolves with the Launch
+       control they already have.
+
+    3. **swOpenDocOptions_ReadOnly, and no read-write fallback.**
+       sw_connection.open_part_silent() has a three-strategy ladder whose
+       second and third rungs (OpenDoc2, bare OpenDoc) have no read-only
+       flag at all — that ladder is exactly what §15.3 was written against,
+       and grade_assignment.py only tolerates it because it hands
+       SOLIDWORKS a scratch copy rather than the original. Here there IS no
+       scratch copy: this is the instructor's real student file, opened for
+       them to look at. So a failure to open read-only is reported as a
+       failure. It is never retried in a mode that could write.
+    """
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    try:
+        try:
+            raw = pythoncom.GetActiveObject("SldWorks.Application")
+        except Exception:
+            raise RuntimeError(
+                "SOLIDWORKS is not running. Launch it first, then try again."
+            )
+
+        # GetActiveObject hands back a PyIUnknown, which has to be
+        # QueryInterface'd to IDispatch before it can be wrapped — found
+        # live: passing the PyIUnknown straight to dynamic.Dispatch fails
+        # with "'PyIUnknown' object has no attribute 'GetTypeInfo'".
+        #
+        # Late binding only from there. sw_connection.py records that early
+        # binding (gencache) breaks OpenDoc on Student Edition, which is the
+        # edition this machine runs.
+        sw = win32com.client.dynamic.Dispatch(
+            raw.QueryInterface(pythoncom.IID_IDispatch))
+
+        try:
+            sw.Visible = True
+        except Exception:
+            pass  # Already visible, or the property is refused; not fatal.
+
+        SW_DOC_PART = 1
+        # swOpenDocOptions_ReadOnly is 2. Verified live this session, and
+        # worth stating plainly because sw_connection.py has it as 32:
+        # opening with 32 leaves IsOpenedReadOnly False (32 is
+        # swOpenDocOptions_AutoMissingConfig), opening with 2 leaves it
+        # True. See MILESTONE_3_REPORT.md.
+        SW_OPEN_READ_ONLY = 2
+
+        # Errors and Warnings are [out] parameters and must be passed as real
+        # BYREF variants. Also found live: passing plain 0, 0 raises
+        # "Type mismatch" (argErr 5), because pywin32 has no type info for a
+        # dynamic dispatch and sends them as [in] longs.
+        from win32com.client import VARIANT
+        errors = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        warnings = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+
+        doc = sw.OpenDoc6(path, SW_DOC_PART, SW_OPEN_READ_ONLY, "",
+                          errors, warnings)
+
+        if doc is None:
+            # Note what does NOT happen here: there is no second strategy.
+            # sw_connection's ladder falls back to OpenDoc2 and bare OpenDoc,
+            # neither of which can express read-only at all. Falling back
+            # that way would open the instructor's real student file
+            # writable, which is the precise thing §15.3 forbids. A file
+            # that will not open read-only is not opened.
+            raise RuntimeError(
+                "SOLIDWORKS would not open the file read-only, so it was not "
+                "opened at all (error code %s). It was NOT retried in a mode "
+                "that could write." % errors.value
+            )
+
+        # Ask SOLIDWORKS what it actually did, rather than trusting the flag
+        # that was passed. Under late binding these read as PROPERTIES, not
+        # methods — doc.IsOpenedReadOnly() raises "bool is not callable" —
+        # so read the attribute and only call it if it turns out callable.
+        def _sw_flag(name):
+            try:
+                v = getattr(doc, name)
+            except Exception:
+                return None
+            try:
+                return bool(v() if callable(v) else v)
+            except Exception:
+                return None
+
+        read_only = _sw_flag("IsOpenedReadOnly")
+
+        if read_only is False:
+            # A writable student file left open on screen is one Ctrl+S away
+            # from a §15.3 violation. Close it again and report the failure.
+            try:
+                sw.CloseDoc(doc.GetTitle)
+            except Exception:
+                pass
+            raise RuntimeError(
+                "SOLIDWORKS opened the file writable despite being asked for "
+                "read-only, so it was closed again. The file was not modified."
+            )
+
+        # Bring the document to the front so the instructor sees the file
+        # they clicked, rather than whatever was already on screen.
+        try:
+            sw.ActivateDoc3(os.path.basename(path), False, 0, 0)
+        except Exception:
+            pass
+
+        return {"read_only": read_only, "view_only": _sw_flag("IsOpenedViewOnly")}
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+@app.route("/api/open_in_solidworks", methods=["POST"])
+def api_open_in_solidworks():
+    """
+    §12.6 "Open student submission" / "Open solution", read-only.
+
+    The response reports whether the file was byte-identical before and
+    after the open. That check is not decoration: this endpoint is the one
+    thing in the product that hands a real student submission to
+    SOLIDWORKS, and §15.3 is the invariant it could break. The open is
+    read-only by construction (above); this proves it per click rather
+    than trusting it.
+    """
+    data = request.get_json(force=True) or {}
+    path, err = _resolve_row_target(data)
+    if err:
+        return err
+
+    with _run_lock:
+        running = _state["run"]["status"] == "running"
+    if running:
+        # SOLIDWORKS is single-threaded (§15.5) and a run owns it for the
+        # duration. Opening a document underneath a live grading loop would
+        # interleave with its own open/rebuild/export cycle.
+        return jsonify({"error": (
+            "A grading run is using SOLIDWORKS. Wait for it to finish, then open the file."
+        ), "reason": "run_in_progress"}), 409
+
+    before = _file_fingerprint(path)
+
+    try:
+        with _com_lock:
+            opened = _open_readonly_in_solidworks(path)
+    except Exception as exc:
+        return jsonify({"error": str(exc), "reason": "open_failed"}), 502
+
+    after = _file_fingerprint(path)
+    unchanged = bool(before and after and before["sha256"] == after["sha256"])
+    if before and after and not unchanged:
+        # Should be impossible with a read-only open. If it ever happens it
+        # is a §15.3 violation and must be shouted about, not logged quietly.
+        print("  !! SPEC 15.3 VIOLATION: " + path + " changed during a read-only open "
+              "(" + before["sha256"][:12] + " -> " + after["sha256"][:12] + ")")
+
+    return jsonify({
+        "opened": path,
+        # What SOLIDWORKS itself reports (IsOpenedReadOnly), not what was
+        # requested. None means the edition would not answer.
+        "read_only": opened.get("read_only"),
+        "unchanged": unchanged,
+        "sha256": (after or {}).get("sha256"),
+    })
+
+
+@app.route("/api/locate_sources", methods=["POST"])
+def api_locate_sources():
+    """
+    Re-point a loaded result at the folder its submissions now live in.
+
+    Results graded before Milestone 3 carry only `filename` (a basename) —
+    there is no absolute path in them at all, so §12.6's row actions have
+    nothing to act on. Rather than leaving those results permanently inert,
+    the instructor can name the submissions folder once and every row that
+    matches a file in it gets its `source_path` filled in.
+
+    Matching is by exact basename, case-insensitively. No fuzzy matching,
+    no stem-prefix guessing: §15.2 is explicit that attribution must not be
+    inferred, and pointing "Open" at the wrong student's file is precisely
+    the class of mistake that rule exists to prevent. A file that does not
+    match by name is simply left unlinked.
+    """
+    data = request.get_json(force=True) or {}
+    folder = data.get("students_folder")
+    if not folder or not os.path.isdir(folder):
+        return jsonify({"error": "Folder not found: " + str(folder)}), 400
+
+    try:
+        on_disk = {
+            n.lower(): os.path.join(folder, n)
+            for n in os.listdir(folder)
+            if n.lower().endswith(SLDPRT_EXTS) and os.path.isfile(os.path.join(folder, n))
+        }
+    except OSError as exc:
+        return jsonify({"error": "Could not read the folder: " + str(exc)}), 400
+
+    if not on_disk:
+        return jsonify({"error": "No .SLDPRT files in " + folder}), 400
+
+    with _run_lock:
+        result = _state["run"].get("result")
+        if not result or not result.get("students"):
+            return jsonify({"error": "No results are loaded."}), 409
+
+        matched, unmatched = 0, []
+        for s in result["students"]:
+            name = s.get("filename")
+            hit = on_disk.get(str(name).lower()) if name else None
+            if hit:
+                s["source_path"] = os.path.abspath(hit)
+                matched += 1
+            else:
+                unmatched.append(name)
+
+        result["students_folder"] = os.path.abspath(folder)
+        result_path = _state.get("result_path")
+        snapshot = json.loads(json.dumps(result))
+
+    saved, save_error = False, None
+    if result_path:
+        try:
+            tmp = result_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, default=str)
+            os.replace(tmp, result_path)   # atomic, same as /api/override
+            saved = True
+        except Exception as exc:
+            save_error = str(exc)
+
+    return jsonify({
+        "matched": matched,
+        "unmatched": unmatched,
+        "total": len(snapshot["students"]),
+        "students_folder": snapshot["students_folder"],
+        "saved": saved,
+        "save_error": save_error,
+        "result": snapshot,
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -809,6 +809,133 @@ table.grid thead .col-sticky { z-index: 3; }
 }
 tr.is-overridden .cell-total { color: var(--sg-cyan); }
 
+/* --------------------------------------------------------------------------
+   §12.6 / Milestone 3 — per-student detail, expanded from the row.
+
+   Everything shown in here was already in the result JSON and simply had
+   nowhere to be displayed. No new tokens: the panel is built from the same
+   surface / border / tint variables the cards above use, so it reads as
+   part of the table rather than as a second design.
+   -------------------------------------------------------------------------- */
+
+/* The chevron that opens a row. Lives inside the frozen name column so the
+   column count — and therefore the sticky offset — does not change. */
+.row-expand {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; margin-right: .5rem;
+  border: 0; border-radius: var(--sg-radius-lg);
+  background: transparent; color: var(--sg-text-faint);
+  cursor: pointer;
+  transition: background var(--sg-duration) var(--sg-ease),
+              color var(--sg-duration) var(--sg-ease),
+              transform var(--sg-duration) var(--sg-ease);
+}
+.row-expand:hover { background: var(--sg-tint-neutral); color: var(--sg-text); }
+.row-expand[aria-expanded="true"] { color: var(--sg-red); transform: rotate(180deg); }
+
+.cell-name-wrap { display: flex; align-items: flex-start; }
+
+table.grid tr.detail-row:hover td { background: var(--sg-surface-sunken); }
+table.grid tr.detail-row > td {
+  padding: 0;
+  background: var(--sg-surface-sunken);
+  border-bottom: 1px solid var(--sg-border);
+  white-space: normal;
+}
+.dark table.grid tr.detail-row > td,
+.dark table.grid tr.detail-row:hover > td { background: color-mix(in srgb, var(--sg-gray-800) 45%, transparent); }
+
+.detail-panel {
+  padding: var(--sg-space-6);
+  animation: sg-fade-in 200ms var(--sg-ease);
+}
+
+.detail-grid {
+  display: grid; gap: var(--sg-space-4);
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  align-items: start;
+}
+
+.detail-card {
+  background: var(--sg-surface);
+  border: 1px solid var(--sg-border);
+  border-radius: var(--sg-radius-xl);
+  padding: var(--sg-space-4);
+}
+.detail-card--wide { grid-column: 1 / -1; }
+.detail-card--error { border-color: rgb(227 30 36 / .35); background: var(--sg-tint-red); }
+
+.detail-card__head {
+  display: flex; align-items: center; gap: var(--sg-space-2);
+  margin-bottom: var(--sg-space-3);
+}
+.detail-card__title {
+  font-size: 10px; font-weight: var(--sg-weight-black);
+  text-transform: uppercase; letter-spacing: var(--sg-tracking-widest);
+  color: var(--sg-text-faint);
+}
+
+/* Label / value pairs. A real <dl> so a screen reader gets the association,
+   laid out as two columns with the value right-aligned and tabular. */
+.dl { display: grid; grid-template-columns: minmax(6rem, auto) 1fr; gap: .375rem var(--sg-space-4); }
+.dl dt { font-size: .8125rem; color: var(--sg-text-muted); }
+.dl dd {
+  font-size: .8125rem; font-weight: var(--sg-weight-bold);
+  text-align: right; font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dl dd.is-faint { font-weight: 400; color: var(--sg-text-faint); font-style: italic; }
+.dl dd.is-bad   { color: var(--sg-red); }
+.dl dd.is-ok    { color: var(--sg-on-green); }
+
+/* One sentence explaining a rule that the numbers alone do not show —
+   e.g. why full shape credit was or was not granted. */
+.detail-note {
+  margin-top: var(--sg-space-3);
+  padding: var(--sg-space-3);
+  border-radius: var(--sg-radius-lg);
+  font-size: .8125rem; line-height: 1.45;
+  background: var(--sg-tint-neutral); color: var(--sg-on-neutral);
+}
+.detail-note--warn { background: var(--sg-tint-amber); color: var(--sg-on-amber); }
+.detail-note--ok   { background: var(--sg-tint-green); color: var(--sg-on-green); }
+
+/* The actual sketch names. §12.6's most actionable line, and until now the
+   UI threw them away. */
+.sketch-list { display: flex; flex-wrap: wrap; gap: var(--sg-space-2); }
+.sketch-chip {
+  font-family: var(--sg-font-mono); font-size: .75rem;
+  padding: .25rem .5rem; border-radius: var(--sg-radius-lg);
+  background: var(--sg-tint-red); color: var(--sg-red);
+}
+
+.detail-path {
+  font-family: var(--sg-font-mono); font-size: .75rem;
+  color: var(--sg-text-muted); overflow-wrap: anywhere; line-height: 1.5;
+}
+
+.detail-actions {
+  display: flex; flex-wrap: wrap; gap: var(--sg-space-2);
+  margin-top: var(--sg-space-3);
+}
+
+.points-total {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-top: var(--sg-space-3); padding-top: var(--sg-space-3);
+  border-top: 1px solid var(--sg-border);
+}
+.points-total__label {
+  font-size: 10px; font-weight: var(--sg-weight-black);
+  text-transform: uppercase; letter-spacing: var(--sg-tracking-widest);
+  color: var(--sg-text-faint);
+}
+.points-total__value {
+  font-size: 1.5rem; font-weight: var(--sg-weight-black);
+  font-variant-numeric: tabular-nums; letter-spacing: var(--sg-tracking-tighter);
+}
+.points-total__value.is-override { color: var(--sg-cyan); }
+
 /* ==========================================================================
    13. Empty / loading / banners — §3.7, §3.8, §3.9
    ========================================================================== */
