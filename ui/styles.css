@@ -1,0 +1,977 @@
+/* ==========================================================================
+   SolidGrade Desktop — stylesheet
+   --------------------------------------------------------------------------
+   Ported from SOLIDGRADE_WEB_REFERENCE.md. There is no build step in this
+   app (SOLIDGRADE_WEB_REFERENCE.md §7.1), so the Tailwind utilities the web
+   app compiles are expressed here as plain CSS custom properties + classes.
+
+   Provenance discipline, per the reference's own labelling:
+     - Token VALUES are [EXACT] per §8 / §2.
+     - Component RECIPES are [EXACT] class strings from §3, resolved to CSS.
+     - Where this file deliberately DIVERGES from the web app, the divergence
+       is marked "DIVERGENCE:" with the reference section that authorises it.
+       Nothing is changed silently.
+   ========================================================================== */
+
+/* ==========================================================================
+   1. Tokens — SOLIDGRADE_WEB_REFERENCE.md §8, verbatim
+   ========================================================================== */
+
+:root {
+  /* Brand */
+  --sg-red: #E31E24;
+  --sg-cyan: #00AEEF;
+
+  /* Neutrals */
+  --sg-gray-50: #f9fafb;   --sg-gray-100: #f3f4f6;  --sg-gray-200: #e5e7eb;
+  --sg-gray-300: #d1d5dc;  --sg-gray-400: #99a1af;  --sg-gray-500: #6a7282;
+  --sg-gray-600: #4a5565;  --sg-gray-700: #364153;  --sg-gray-800: #1e2939;
+  --sg-gray-900: #101828;  --sg-gray-950: #030712;
+
+  /* Status */
+  --sg-green-50: #f0fdf4;  --sg-green-500: #00c950; --sg-green-600: #00a63e;
+  --sg-amber-50: #fffbeb;  --sg-amber-500: #fe9a00; --sg-amber-600: #e17100;
+  --sg-orange-50: #fff7ed; --sg-orange-500: #ff6900; --sg-orange-600: #f54a00;
+  --sg-orange-700: #ca3500;
+  --sg-blue-50: #eff6ff;   --sg-blue-600: #155dfc;
+  --sg-red-50: #fef2f2;    --sg-red-600: #e7000b;   --sg-red-100: #ffe2e2;
+
+  /* Semantic — light */
+  --sg-bg: var(--sg-gray-50);
+  --sg-surface: #ffffff;
+  --sg-surface-sunken: var(--sg-gray-50);
+  --sg-border: var(--sg-gray-100);
+  --sg-border-strong: var(--sg-gray-200);
+  --sg-text: var(--sg-gray-900);
+  --sg-text-muted: var(--sg-gray-500);
+  --sg-text-faint: var(--sg-gray-400);
+  --sg-heading: var(--sg-gray-900);
+
+  /* Tinted surfaces that must flip in dark mode */
+  --sg-tint-red: var(--sg-red-50);
+  --sg-tint-green: var(--sg-green-50);
+  --sg-tint-amber: var(--sg-amber-50);
+  --sg-tint-blue: var(--sg-blue-50);
+  --sg-tint-orange: var(--sg-orange-50);
+  --sg-tint-neutral: var(--sg-gray-100);
+  --sg-on-green: var(--sg-green-600);
+  --sg-on-amber: var(--sg-amber-600);
+  --sg-on-blue: var(--sg-blue-600);
+  --sg-on-orange: #c93400;
+  --sg-on-neutral: var(--sg-gray-600);
+
+  /* Type */
+  --sg-font: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+             "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --sg-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  "Liberation Mono", "Courier New", monospace;
+  --sg-weight-bold: 700;
+  --sg-weight-black: 900;
+  --sg-tracking-widest: 0.1em;
+  --sg-tracking-tighter: -0.05em;
+
+  /* Space (4px base) */
+  --sg-space-1: 0.25rem; --sg-space-2: 0.5rem;  --sg-space-3: 0.75rem;
+  --sg-space-4: 1rem;    --sg-space-6: 1.5rem;  --sg-space-8: 2rem;
+
+  /* Radii */
+  --sg-radius-lg: 0.5rem;   /*  8px */
+  --sg-radius-xl: 0.75rem;  /* 12px — buttons, inputs, nav */
+  --sg-radius-2xl: 1rem;    /* 16px */
+  --sg-radius-3xl: 1.5rem;  /* 24px — cards, modals */
+
+  /* Shadows */
+  --sg-shadow-sm: 0 1px 3px 0 rgb(0 0 0 / .1), 0 1px 2px -1px rgb(0 0 0 / .1);
+  --sg-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1);
+  --sg-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / .1), 0 8px 10px -6px rgb(0 0 0 / .1);
+  --sg-shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / .25);
+  --sg-glow-red:  0 10px 15px -3px rgb(227 30 36 / .2), 0 4px 6px -4px rgb(227 30 36 / .2);
+  --sg-glow-cyan: 0 10px 15px -3px rgb(0 174 239 / .2), 0 4px 6px -4px rgb(0 174 239 / .2);
+
+  /* Motion */
+  --sg-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --sg-duration: 150ms;
+  --sg-duration-theme: 300ms;
+
+  /* Layout */
+  --sg-sidebar-w: 18rem;    /* 288px */
+  --sg-header-h: 5rem;      /* 80px desktop, 64px mobile */
+  --sg-content-max: 80rem;  /* 1280px */
+}
+
+/* --------------------------------------------------------------------------
+   Dark mode — §2.11. Class-based (`.dark` on <html> and <body>), NOT
+   prefers-color-scheme, exactly as ThemeContext.tsx does it.
+
+   DIVERGENCE (§2.11, §7.3): the web app's dark mode is incomplete — six
+   screens hardcode light-only classes and are saved only by broad
+   base-layer overrides. This file expresses dark mode purely as token
+   reassignment, so every surface flips uniformly and there is no
+   specificity war to reproduce.
+   -------------------------------------------------------------------------- */
+.dark {
+  --sg-bg: var(--sg-gray-950);
+  --sg-surface: var(--sg-gray-900);
+  --sg-surface-sunken: var(--sg-gray-800);
+  --sg-border: var(--sg-gray-800);
+  --sg-border-strong: var(--sg-gray-700);
+  --sg-text: #ffffff;
+  --sg-text-muted: var(--sg-gray-400);
+  --sg-text-faint: var(--sg-gray-500);
+  --sg-heading: #ffffff;
+
+  --sg-tint-red: rgb(227 30 36 / .10);
+  --sg-tint-green: rgb(0 166 62 / .18);
+  --sg-tint-amber: rgb(225 113 0 / .18);
+  --sg-tint-blue: rgb(21 93 252 / .18);
+  --sg-tint-orange: rgb(245 74 0 / .18);
+  --sg-tint-neutral: var(--sg-gray-800);
+  --sg-on-green: #5eeb9a;
+  --sg-on-amber: #fbbf4c;
+  --sg-on-blue: #7aa5ff;
+  --sg-on-orange: #ff9d66;
+  --sg-on-neutral: var(--sg-gray-400);
+}
+
+/* ==========================================================================
+   2. Base
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--sg-font);
+  background: var(--sg-bg);
+  color: var(--sg-text);
+  transition: background-color var(--sg-duration-theme) var(--sg-ease),
+              color var(--sg-duration-theme) var(--sg-ease);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the app shell scrolls its own content region */
+}
+
+h1, h2, h3, h4, h5, h6 { margin: 0; color: var(--sg-heading); }
+
+/* §2.11 [EXACT], DECISION: KEPT. In dark mode every <h1> is brand red.
+   The reference calls this "a genuine, visible identity trait of the dark
+   theme ... not a bug to fix without asking". Asked; keeping it. */
+.dark h1 { color: var(--sg-red); }
+
+p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: inherit; }
+
+/* --------------------------------------------------------------------------
+   Focus — DIVERGENCE (§3.11, §7.3). The web app has NO visible focus
+   indicator anywhere: .input-field sets outline-none and styles only
+   :focus via border colour, and buttons define no focus style at all.
+   §7.3 lists this as something to improve rather than replicate, and calls
+   it out as mattering more in a keyboard-heavy desktop grading workflow.
+   A single global :focus-visible ring, applied to everything focusable.
+   -------------------------------------------------------------------------- */
+:focus { outline: none; }
+
+:focus-visible {
+  outline: 2px solid var(--sg-red);
+  outline-offset: 2px;
+  border-radius: var(--sg-radius-lg);
+}
+
+/* On brand-red surfaces a red ring is invisible; use the cyan accent. */
+.btn-primary:focus-visible,
+.nav-item.is-active:focus-visible,
+.badge-red:focus-visible {
+  outline-color: var(--sg-cyan);
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Skip link — no equivalent in the web app; added for keyboard users. */
+.skip-link {
+  position: absolute; left: var(--sg-space-4); top: -3rem; z-index: 100;
+  background: var(--sg-red); color: #fff;
+  padding: var(--sg-space-2) var(--sg-space-4);
+  border-radius: var(--sg-radius-xl); font-weight: var(--sg-weight-bold);
+  transition: top var(--sg-duration) var(--sg-ease);
+}
+.skip-link:focus { top: var(--sg-space-4); }
+
+/* ==========================================================================
+   3. Motion — §2.9
+   --------------------------------------------------------------------------
+   DIVERGENCE (§2.9, §7.2 item 5), DECISION: IMPLEMENT. The web app's
+   animate-in / fade-in / zoom-in-95 / slide-in-from-top classes come from
+   tailwindcss-animate, which is NOT in its package.json — they compile to
+   nothing and the animations never run. Implemented here as real keyframes.
+   ========================================================================== */
+
+@keyframes sg-spin      { to { transform: rotate(360deg); } }
+@keyframes sg-pulse     { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+@keyframes sg-fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sg-zoom-in-95 { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: none; } }
+@keyframes sg-slide-in-from-top { from { opacity: 0; transform: translateY(-.5rem); } to { opacity: 1; transform: none; } }
+@keyframes sg-slide-in-from-left { from { transform: translateX(-100%); } to { transform: none; } }
+
+.animate-fade-in  { animation: sg-fade-in 200ms var(--sg-ease); }
+.animate-zoom-in  { animation: sg-zoom-in-95 200ms var(--sg-ease); }
+.animate-slide-top{ animation: sg-slide-in-from-top 300ms var(--sg-ease); }
+.animate-pulse    { animation: sg-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ==========================================================================
+   4. App shell — §4.1
+   ========================================================================== */
+
+.app {
+  min-height: 100vh; height: 100vh;
+  background: var(--sg-bg);
+  display: flex;
+  transition: background-color var(--sg-duration-theme) var(--sg-ease);
+}
+
+/* Sidebar: w-72 (288px), white surface, right border, sticky h-screen. */
+.sidebar {
+  width: var(--sg-sidebar-w);
+  flex: 0 0 var(--sg-sidebar-w);
+  background: var(--sg-surface);
+  border-right: 1px solid var(--sg-border);
+  height: 100vh;
+  display: flex; flex-direction: column;
+  transition: background-color var(--sg-duration-theme) var(--sg-ease),
+              border-color var(--sg-duration-theme) var(--sg-ease);
+}
+
+/* §4.1: sidebar is `hidden lg:flex` — hidden below 1024px. */
+@media (max-width: 1023px) {
+  .sidebar { display: none; }
+  .sidebar.is-open {
+    display: flex; position: fixed; inset: 0 auto 0 0; z-index: 50;
+    box-shadow: var(--sg-shadow-2xl);
+    animation: sg-slide-in-from-left 250ms var(--sg-ease);
+  }
+}
+
+.sidebar__brand { padding: var(--sg-space-8); }
+.sidebar__nav { flex: 1; padding: 0 var(--sg-space-4); overflow-y: auto; }
+.sidebar__nav > * + * { margin-top: var(--sg-space-1); }
+.sidebar__foot { padding: var(--sg-space-4); border-top: 1px solid var(--sg-border); }
+
+.scrim {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgb(0 0 0 / .5); backdrop-filter: blur(4px);
+  animation: sg-fade-in 200ms var(--sg-ease);
+}
+@media (min-width: 1024px) { .scrim { display: none; } }
+
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* Header: h-16 mobile / h-20 lg, px-4 / lg:px-8, sticky, z-10. */
+.header {
+  background: var(--sg-surface);
+  border-bottom: 1px solid var(--sg-border);
+  height: 4rem;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--sg-space-4);
+  position: sticky; top: 0; z-index: 10;
+  flex: 0 0 auto;
+  gap: var(--sg-space-4);
+  transition: background-color var(--sg-duration-theme) var(--sg-ease),
+              border-color var(--sg-duration-theme) var(--sg-ease);
+}
+@media (min-width: 1024px) {
+  .header { height: var(--sg-header-h); padding: 0 var(--sg-space-8); }
+}
+
+.header__actions { margin-left: auto; display: flex; align-items: center; gap: var(--sg-space-2); }
+
+/* Content: p-4 / lg:p-8, max-w-7xl, centred. Scrolls independently so the
+   header and sidebar stay put — the desktop equivalent of `sticky top-0`. */
+.content {
+  padding: var(--sg-space-4);
+  max-width: var(--sg-content-max);
+  margin: 0 auto; width: 100%;
+  flex: 1; overflow-y: auto;
+}
+@media (min-width: 1024px) { .content { padding: var(--sg-space-8); } }
+
+.page > * + * { margin-top: var(--sg-space-6); }
+.page-title { font-size: 1.875rem; font-weight: var(--sg-weight-black);
+              letter-spacing: var(--sg-tracking-tighter); }
+.page-sub { color: var(--sg-text-muted); margin-top: var(--sg-space-1); }
+
+/* ==========================================================================
+   5. Logo — §4.3
+   ========================================================================== */
+
+.logo { display: inline-flex; align-items: center; gap: var(--sg-space-3);
+        background: none; border: 0; padding: 0; cursor: default; }
+
+.logo__mark {
+  background: var(--sg-red);
+  border-radius: var(--sg-radius-lg);
+  box-shadow: var(--sg-glow-red);
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+}
+.logo--sm .logo__mark { width: 24px; height: 24px; }
+.logo--md .logo__mark { width: 32px; height: 32px; }
+.logo--lg .logo__mark { width: 48px; height: 48px; }
+.logo__mark svg { width: 75%; height: 75%; display: block; }
+
+.logo__word { font-weight: var(--sg-weight-black);
+              letter-spacing: var(--sg-tracking-tighter); line-height: 1; }
+.logo--sm .logo__word { font-size: 1.125rem; }
+.logo--md .logo__word { font-size: 1.5rem; }
+.logo--lg .logo__word { font-size: 2.25rem; }
+.logo__word .is-solid { color: var(--sg-heading); }
+.logo__word .is-grade { color: var(--sg-red); }
+
+/* ==========================================================================
+   6. Nav items — §4.1 [EXACT]
+   ========================================================================== */
+
+.nav-item {
+  display: flex; align-items: center; gap: var(--sg-space-3);
+  padding: var(--sg-space-3) var(--sg-space-4);
+  border-radius: var(--sg-radius-xl);
+  font-weight: var(--sg-weight-bold);
+  transition: all var(--sg-duration) var(--sg-ease);
+  background: transparent; border: 0; width: 100%;
+  text-align: left; cursor: pointer;
+  color: var(--sg-text-muted);
+}
+.nav-item:hover:not(:disabled) { background: var(--sg-surface-sunken); color: var(--sg-text); }
+.dark .nav-item:hover:not(:disabled) { background: var(--sg-gray-800); color: #fff; }
+.nav-item.is-active { background: var(--sg-tint-red); color: var(--sg-red); }
+.nav-item:disabled { opacity: .45; cursor: not-allowed; }
+.nav-item svg { flex: 0 0 auto; }
+
+/* §4.1 [EXACT] — Logout reuses the nav shape but hovers red. */
+.nav-item--danger:hover:not(:disabled) { background: var(--sg-tint-red); color: var(--sg-red); }
+
+.nav-item__badge {
+  margin-left: auto;
+  background: var(--sg-tint-red); color: var(--sg-red);
+  border-radius: 999px; padding: 0 .5rem;
+  font-size: .6875rem; font-weight: var(--sg-weight-black);
+  min-width: 1.25rem; text-align: center;
+}
+
+/* ==========================================================================
+   7. Buttons — §3.1
+   ========================================================================== */
+
+.btn-primary {
+  background: var(--sg-red);
+  color: #fff;
+  padding: 0.5rem 1.5rem;
+  border-radius: var(--sg-radius-xl);
+  font-weight: var(--sg-weight-bold);
+  border: 1px solid transparent;
+  box-shadow: var(--sg-glow-red);
+  transition: all var(--sg-duration) var(--sg-ease);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sg-space-2);
+}
+/* DIVERGENCE (§2.3 hover-mismatch, §7.2 item 1), DECISION: FIXED.
+   The web app hovers to Tailwind's red-600 #e7000b, which is a different
+   hue from the #E31E24 brand red — visibly off-brand. Replaced with a
+   darkened brand red. */
+.btn-primary:hover:not(:disabled) { background: #c4181d; }
+.btn-primary:active:not(:disabled) { transform: scale(0.95); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+
+.btn-secondary {
+  background: var(--sg-gray-100);
+  color: var(--sg-gray-600);
+  padding: 0.5rem 1.5rem;
+  border-radius: var(--sg-radius-xl);
+  font-weight: var(--sg-weight-bold);
+  /* DIVERGENCE (§3.1 known defect, §7.2 item 2), DECISION: FIXED.
+     .btn-secondary sets no border-width, yet many call sites add border
+     *colours* (border-green-200, border-sw-cyan/20, border-gray-200) which
+     therefore render nothing. The source's intent was clearly outlines. */
+  border: 1px solid var(--sg-border-strong);
+  transition: all var(--sg-duration) var(--sg-ease);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sg-space-2);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--sg-gray-200); }
+.btn-secondary:active:not(:disabled) { transform: scale(0.95); }
+.btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
+.dark .btn-secondary { background: var(--sg-gray-800); color: var(--sg-gray-300);
+                       border-color: var(--sg-gray-700); }
+.dark .btn-secondary:hover:not(:disabled) { background: var(--sg-gray-700); }
+
+/* Size overrides seen at call sites (§3.1 [EXACT]). */
+.btn-lg { padding: 1rem 3rem; font-size: 1.125rem; }
+.btn-md { padding: 0.75rem 1.5rem; }
+.btn-sm { padding: 0.5rem 1rem; font-size: .875rem; }
+
+/* Tinted action buttons — §3.1 [EXACT] */
+.btn-tint {
+  padding: 0.5rem 0.75rem; border-radius: var(--sg-radius-lg);
+  font-size: .75rem; font-weight: var(--sg-weight-bold);
+  border: 1px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: .375rem; cursor: pointer;
+  transition: all var(--sg-duration) var(--sg-ease);
+}
+.btn-tint:disabled { opacity: .5; cursor: not-allowed; }
+.btn-tint--red   { background: var(--sg-tint-red);   color: var(--sg-red); }
+.btn-tint--red:hover:not(:disabled)   { background: var(--sg-red);   color: #fff; }
+.btn-tint--cyan  { background: rgb(0 174 239 / .1);  color: var(--sg-cyan); }
+.btn-tint--cyan:hover:not(:disabled)  { background: var(--sg-cyan);  color: #fff; }
+.btn-tint--green { background: var(--sg-tint-green); color: var(--sg-on-green); }
+.btn-tint--green:hover:not(:disabled) { background: var(--sg-green-600); color: #fff; }
+.btn-tint--neutral { background: var(--sg-tint-neutral); color: var(--sg-on-neutral); }
+.btn-tint--neutral:hover:not(:disabled) { background: var(--sg-gray-200); }
+.dark .btn-tint--neutral:hover:not(:disabled) { background: var(--sg-gray-700); }
+
+/* Icon button — §3.1 [EXACT], background-on-hover variant */
+.icon-btn {
+  padding: var(--sg-space-2); border-radius: var(--sg-radius-lg);
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--sg-text-faint);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all var(--sg-duration) var(--sg-ease);
+}
+.icon-btn:hover { background: var(--sg-gray-100); color: var(--sg-text); }
+.dark .icon-btn:hover { background: var(--sg-gray-800); color: #fff; }
+.icon-btn--danger:hover { color: var(--sg-red); }
+
+@media (min-width: 1024px) { .lg-hidden { display: none !important; } }
+
+/* Segmented control — §3.1 [EXACT] */
+.segmented {
+  display: inline-flex; gap: var(--sg-space-1);
+  background: var(--sg-tint-neutral);
+  padding: var(--sg-space-1);
+  border-radius: var(--sg-radius-xl);
+  width: fit-content; max-width: 100%; flex-wrap: wrap;
+}
+.segmented__btn {
+  padding: 0.5rem 1rem; border-radius: var(--sg-radius-lg);
+  font-size: .875rem; font-weight: var(--sg-weight-bold);
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--sg-text-muted);
+  transition: all var(--sg-duration) var(--sg-ease);
+}
+.segmented__btn:hover { color: var(--sg-text); }
+.segmented__btn[aria-pressed="true"] {
+  background: var(--sg-surface); color: var(--sg-red); box-shadow: var(--sg-shadow-sm);
+}
+.dark .segmented__btn[aria-pressed="true"] { background: var(--sg-gray-700); }
+
+/* §3.1 [EXACT]: the gradebook filter variant uses solid fills instead. */
+.segmented--filters .segmented__btn[aria-pressed="true"] { box-shadow: none; }
+.segmented--filters .segmented__btn[data-tone="all"][aria-pressed="true"]    { background: var(--sg-gray-900); color: #fff; }
+.dark .segmented--filters .segmented__btn[data-tone="all"][aria-pressed="true"] { background: #fff; color: var(--sg-gray-900); }
+.segmented--filters .segmented__btn[data-tone="review"][aria-pressed="true"] { background: var(--sg-red); color: #fff; }
+.segmented--filters .segmented__btn[data-tone="plag"][aria-pressed="true"]   { background: var(--sg-amber-500); color: #fff; }
+.segmented--filters .segmented__btn[data-tone="clean"][aria-pressed="true"]  { background: var(--sg-green-600); color: #fff; }
+
+/* Theme toggle — §2.9: active:scale-95 */
+.theme-toggle:active { transform: scale(0.95); }
+
+/* ==========================================================================
+   8. Cards — §3.2
+   ========================================================================== */
+
+.card {
+  background: var(--sg-surface);
+  border: 1px solid var(--sg-border);
+  border-radius: var(--sg-radius-3xl);
+  padding: var(--sg-space-6);
+  box-shadow: var(--sg-shadow-sm);
+  transition: all var(--sg-duration-theme) var(--sg-ease);
+}
+.card--flush { padding: 0; overflow: hidden; }
+.card--hover:hover { border-color: rgb(227 30 36 / .2); }
+
+.card__head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sg-space-4); flex-wrap: wrap;
+}
+.card__title {
+  font-size: 1.125rem; font-weight: var(--sg-weight-black);
+  letter-spacing: var(--sg-tracking-tighter);
+}
+
+/* Micro-label — §3.3 [EXACT] */
+.micro-label {
+  display: block; font-size: 10px; font-weight: var(--sg-weight-black);
+  color: var(--sg-text-faint); text-transform: uppercase;
+  letter-spacing: var(--sg-tracking-widest); margin-bottom: var(--sg-space-2);
+}
+
+.label {
+  display: block; font-size: .875rem; font-weight: var(--sg-weight-bold);
+  color: var(--sg-gray-700); margin-bottom: var(--sg-space-2);
+}
+.dark .label { color: var(--sg-gray-300); }
+
+/* ==========================================================================
+   9. Forms — §3.3
+   ========================================================================== */
+
+.input-field {
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background: var(--sg-surface-sunken);
+  border: 1px solid var(--sg-border);
+  border-radius: var(--sg-radius-xl);
+  outline: none;
+  transition: all var(--sg-duration) var(--sg-ease);
+  color: var(--sg-text);
+}
+.dark .input-field { background: var(--sg-gray-800); border-color: var(--sg-gray-700); color: #fff; }
+.input-field::placeholder { color: var(--sg-text-faint); }
+
+/* §3.3 [DERIVED] recommendation: two focus idioms coexist in the web app
+   (border-sw-red/50 vs ring-2 ring-sw-red/20 + border-sw-red). The ring
+   version is "more visible and more accessible; recommend standardizing on
+   it." Standardised on the ring. */
+.input-field:focus {
+  border-color: var(--sg-red);
+  box-shadow: 0 0 0 2px rgb(227 30 36 / .2);
+}
+.input-field:disabled { background: var(--sg-gray-100); cursor: not-allowed; color: var(--sg-text-muted); }
+.dark .input-field:disabled { background: var(--sg-gray-800); }
+
+.input-md { padding: 0.75rem 1rem; }
+
+.field-hint { font-size: .75rem; color: var(--sg-text-muted); margin-top: var(--sg-space-2); }
+.field-error { font-size: .75rem; color: var(--sg-red); font-weight: var(--sg-weight-bold);
+               margin-top: var(--sg-space-2); }
+
+/* Leading-icon input — §3.3 [EXACT] */
+.input-wrap { position: relative; }
+.input-wrap > svg {
+  position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
+  color: var(--sg-text-faint); pointer-events: none;
+}
+.input-wrap .input-field { padding-left: 2.5rem; }
+
+/* --------------------------------------------------------------------------
+   Path picker — §3.3 "File dropzone", adapted.
+
+   DIVERGENCE, mandated by §7.4 and §3.3's own Milestone 2 note: SolidGrade
+   Desktop never uploads or copies student files (SPEC §13 — they are
+   referenced in place), and uses native tkinter dialogs. So this wears the
+   dropzone's visual clothes — 2px dashed border, rounded-2xl, idle / hover /
+   chosen states, green when populated, clear button at top-right, icon
+   turning green — but it is a BUTTON that opens a native dialog, not a drop
+   target. There is deliberately no dragover state, because nothing can be
+   dropped here.
+   -------------------------------------------------------------------------- */
+.picker { position: relative; }
+
+.picker__btn {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sg-space-2);
+  padding: var(--sg-space-6);
+  border: 2px dashed var(--sg-border-strong);
+  border-radius: var(--sg-radius-2xl);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--sg-duration) var(--sg-ease);
+  color: var(--sg-text-muted);
+  text-align: center;
+  min-height: 8.5rem;
+}
+@media (min-width: 640px) { .picker__btn { padding: var(--sg-space-8); } }
+
+.picker__btn:hover:not(:disabled) {
+  border-color: rgb(227 30 36 / .2);
+  background: var(--sg-tint-red);
+}
+.picker__btn:disabled { opacity: .5; cursor: not-allowed; }
+.picker__btn:active:not(:disabled) { transform: scale(0.99); }
+
+.picker.is-chosen .picker__btn {
+  border-color: #b9f8cf;
+  background: var(--sg-tint-green);
+  border-style: solid;
+}
+.dark .picker.is-chosen .picker__btn { border-color: rgb(0 201 80 / .35); }
+
+.picker.is-stale .picker__btn {
+  border-color: var(--sg-amber-500);
+  background: var(--sg-tint-amber);
+  border-style: solid;
+}
+
+.picker__icon { color: var(--sg-text-faint); transition: color var(--sg-duration) var(--sg-ease); }
+.picker.is-chosen .picker__icon { color: var(--sg-green-500); }
+.picker.is-stale  .picker__icon { color: var(--sg-amber-500); }
+
+.picker__title { font-weight: var(--sg-weight-bold); color: var(--sg-text); }
+.picker__hint { font-size: .75rem; color: var(--sg-text-muted); }
+
+.picker__path {
+  font-family: var(--sg-font-mono); font-size: .75rem;
+  word-break: break-all; max-width: 100%;
+  color: var(--sg-text-muted);
+}
+.picker.is-chosen .picker__path { color: var(--sg-on-green); }
+
+/* §3.3 [EXACT]: populated state renders a small clear button at top-2 right-2. */
+.picker__clear { position: absolute; top: .5rem; right: .5rem; z-index: 1; }
+
+/* ==========================================================================
+   10. Status badges and pills — §3.5
+   ========================================================================== */
+
+.badge {
+  display: inline-flex; align-items: center; gap: .375rem;
+  padding: 0.125rem 0.625rem;
+  border-radius: 999px;
+  font-size: .75rem; font-weight: var(--sg-weight-bold);
+  text-transform: uppercase; letter-spacing: .05em;
+  white-space: nowrap;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: 0.125rem 0.5rem; border-radius: var(--sg-radius-lg);
+  font-size: 10px; font-weight: var(--sg-weight-black);
+  text-transform: uppercase; letter-spacing: var(--sg-tracking-widest);
+  white-space: nowrap;
+}
+
+/* §3.5 [EXACT] grading-job status → style */
+.badge-gray,  .chip-gray   { background: var(--sg-tint-neutral); color: var(--sg-on-neutral); }
+.badge-blue,  .chip-blue   { background: var(--sg-tint-blue);    color: var(--sg-on-blue); }
+.badge-green, .chip-green  { background: var(--sg-tint-green);   color: var(--sg-on-green); }
+.badge-amber, .chip-amber  { background: var(--sg-tint-amber);   color: var(--sg-on-amber); }
+.badge-red,   .chip-red    { background: var(--sg-tint-red);     color: var(--sg-red); }
+.badge-orange,.chip-orange { background: var(--sg-tint-orange);  color: var(--sg-on-orange); }
+.badge-cyan,  .chip-cyan   { background: rgb(0 174 239 / .1);    color: var(--sg-cyan); }
+
+/* The System Ready pill in the header — §3: "quiet when healthy, assertive
+   when not", click expands. */
+.ready-pill {
+  display: inline-flex; align-items: center; gap: var(--sg-space-2);
+  padding: 0.375rem 0.875rem;
+  border-radius: 999px;
+  font-size: .8125rem; font-weight: var(--sg-weight-bold);
+  border: 1px solid transparent;
+  background: var(--sg-tint-neutral); color: var(--sg-on-neutral);
+  cursor: pointer;
+  transition: all var(--sg-duration) var(--sg-ease);
+}
+.ready-pill:hover { filter: brightness(.97); }
+.ready-pill[data-state="ready"]   { background: var(--sg-tint-green); color: var(--sg-on-green);
+                                    border-color: rgb(0 201 80 / .25); }
+.ready-pill[data-state="blocked"] { background: var(--sg-tint-red);   color: var(--sg-red);
+                                    border-color: rgb(227 30 36 / .25); }
+.ready-pill[data-state="busy"]    { background: var(--sg-tint-blue);  color: var(--sg-on-blue);
+                                    border-color: rgb(21 93 252 / .25); }
+
+.dot { width: .5rem; height: .5rem; border-radius: 999px; background: currentColor; flex: 0 0 auto; }
+
+/* Result-flag tiles — §3.5 [EXACT] */
+.flag-tile {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0.375rem; border-radius: var(--sg-radius-lg);
+  border: 1px solid transparent;
+}
+.flag-tile--plag   { color: var(--sg-amber-500); background: var(--sg-tint-amber);
+                     border-color: #fef3c6; }
+.flag-tile--review { color: var(--sg-red); background: rgb(227 30 36 / .05);
+                     border-color: rgb(227 30 36 / .1); }
+.flag-tile--clean  { color: var(--sg-green-500); background: var(--sg-tint-green);
+                     border-color: #dbfce7; }
+.dark .flag-tile--plag { border-color: rgb(254 154 0 / .3); }
+.dark .flag-tile--clean { border-color: rgb(0 201 80 / .3); }
+
+/* ==========================================================================
+   11. Status rows (the expanded System Ready panel) — §3.1/§3.2
+   ========================================================================== */
+
+.status-row {
+  display: flex; align-items: flex-start; gap: var(--sg-space-3);
+  padding: var(--sg-space-4) 0;
+  border-top: 1px solid var(--sg-border);
+}
+.status-row:first-child { border-top: 0; padding-top: 0; }
+.status-row__icon { flex: 0 0 auto; margin-top: .125rem; }
+.status-row__body { flex: 1; min-width: 0; }
+.status-row__title { font-weight: var(--sg-weight-bold); }
+.status-row__detail { font-size: .875rem; color: var(--sg-text-muted); margin-top: var(--sg-space-1); }
+.status-row__action { flex: 0 0 auto; align-self: center; }
+
+.is-ok   { color: var(--sg-green-500); }
+.is-bad  { color: var(--sg-red); }
+.is-warn { color: var(--sg-amber-500); }
+.is-idle { color: var(--sg-text-faint); }
+
+/* ==========================================================================
+   12. Tables — §3.4 / §12.1
+   ========================================================================== */
+
+.table-toolbar {
+  padding: var(--sg-space-6);
+  border-bottom: 1px solid var(--sg-border);
+  display: flex; flex-direction: column; gap: var(--sg-space-4);
+  background: color-mix(in srgb, var(--sg-gray-50) 50%, transparent);
+}
+.dark .table-toolbar { background: color-mix(in srgb, var(--sg-gray-800) 40%, transparent); }
+@media (min-width: 768px) {
+  .table-toolbar { flex-direction: row; align-items: center; justify-content: space-between; }
+}
+
+.table-scroll { overflow-x: auto; }
+
+table.grid { width: 100%; text-align: left; border-collapse: separate; border-spacing: 0; }
+
+table.grid th, table.grid td {
+  padding: var(--sg-space-3) var(--sg-space-4);
+  border-bottom: 1px solid var(--sg-border);
+  white-space: nowrap;
+}
+table.grid thead th {
+  font-size: 10px; font-weight: var(--sg-weight-black);
+  text-transform: uppercase; letter-spacing: var(--sg-tracking-widest);
+  color: var(--sg-text-faint);
+  background: var(--sg-surface);
+  position: sticky; top: 0; z-index: 2;
+}
+table.grid tbody tr:hover td { background: var(--sg-surface-sunken); }
+.dark table.grid tbody tr:hover td { background: color-mix(in srgb, var(--sg-gray-800) 60%, transparent); }
+table.grid tbody tr:last-child td { border-bottom: 0; }
+
+/* §12.1: frozen student-name column. */
+table.grid .col-sticky {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--sg-surface);
+  border-right: 1px solid var(--sg-border);
+}
+table.grid tbody tr:hover .col-sticky { background: var(--sg-surface-sunken); }
+.dark table.grid tbody tr:hover .col-sticky { background: #16202f; }
+table.grid thead .col-sticky { z-index: 3; }
+
+.th-sort {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  display: inline-flex; align-items: center; gap: .25rem;
+}
+.th-sort:hover { color: var(--sg-red); }
+.th-sort__caret { opacity: 0; transition: opacity var(--sg-duration) var(--sg-ease); }
+.th-sort[aria-sort="ascending"] .th-sort__caret,
+.th-sort[aria-sort="descending"] .th-sort__caret { opacity: 1; }
+.th-sort[aria-sort="descending"] .th-sort__caret { transform: rotate(180deg); }
+
+.cell-name { font-weight: var(--sg-weight-bold); }
+.cell-file { font-size: .75rem; color: var(--sg-text-faint);
+             font-family: var(--sg-font-mono); font-weight: 400; }
+.cell-num  { font-variant-numeric: tabular-nums; }
+.cell-total { font-weight: var(--sg-weight-black); font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------------------
+   §12.3 pass / flag / not-evaluated, and SPEC §15.1's three-state rule.
+
+   A check is pass, fail, or NOT EVALUATED — the last of which is null, and
+   must never render as 0 or as a fail. Encoding is glyph + text label +
+   colour, never colour alone (§3.11 flags colour-only encoding as a defect).
+   -------------------------------------------------------------------------- */
+.check {
+  display: inline-flex; align-items: center; gap: .375rem;
+  font-weight: var(--sg-weight-bold); font-size: .8125rem;
+}
+.check--pass { color: var(--sg-on-green); }
+.check--fail { color: var(--sg-red); }
+.check--none { color: var(--sg-text-faint); font-style: italic; }
+.check__glyph { font-size: .9375rem; line-height: 1; }
+
+.override-mark {
+  display: inline-flex; align-items: center; gap: .25rem;
+  margin-left: .375rem; color: var(--sg-cyan);
+}
+tr.is-overridden .cell-total { color: var(--sg-cyan); }
+
+/* ==========================================================================
+   13. Empty / loading / banners — §3.7, §3.8, §3.9
+   ========================================================================== */
+
+.empty {
+  padding: 5rem 1.5rem; text-align: center;
+  background: color-mix(in srgb, var(--sg-gray-50) 50%, transparent);
+  border: 2px dashed var(--sg-border-strong);
+  border-radius: var(--sg-radius-3xl);
+}
+.dark .empty { background: color-mix(in srgb, var(--sg-gray-900) 50%, transparent); }
+.empty--compact { padding: 3rem 1.5rem; }
+.empty svg { color: var(--sg-gray-300); margin: 0 auto var(--sg-space-4); display: block; }
+.dark .empty svg { color: var(--sg-gray-700); }
+.empty h3 { font-size: 1.25rem; font-weight: var(--sg-weight-bold); color: var(--sg-text-faint); }
+.dark .empty h3 { color: var(--sg-gray-500); }
+.empty p { color: var(--sg-text-faint); margin-top: var(--sg-space-2); }
+
+/* §3.8 [EXACT]: ring spinner, always the same construction. */
+.spinner {
+  border-radius: 999px;
+  border-top: 2px solid var(--sg-red);
+  border-bottom: 2px solid var(--sg-red);
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+  animation: sg-spin 1s linear infinite;
+  flex: 0 0 auto;
+}
+.spinner--lg { width: 3rem; height: 3rem; }
+.spinner--md { width: 2rem; height: 2rem; }
+.spinner--sm { width: 1.25rem; height: 1.25rem; border-top-color: #fff; border-bottom-color: #fff; }
+
+.banner {
+  padding: var(--sg-space-4);
+  border-radius: var(--sg-radius-xl);
+  font-size: .875rem; font-weight: var(--sg-weight-bold);
+  border: 1px solid transparent;
+  display: flex; align-items: flex-start; gap: var(--sg-space-2);
+}
+.banner svg { flex: 0 0 auto; margin-top: .0625rem; }
+.banner--error   { background: var(--sg-tint-red);   color: var(--sg-red);      border-color: #ffe2e2; }
+.banner--success { background: var(--sg-tint-green); color: var(--sg-on-green); border-color: #dbfce7; }
+.banner--warning { background: var(--sg-tint-orange);color: var(--sg-on-orange);border-color: #ffedd4; }
+.banner--info    { background: var(--sg-tint-blue);  color: var(--sg-on-blue);  border-color: #dbeafe; }
+.dark .banner--error   { border-color: rgb(227 30 36 / .3); }
+.dark .banner--success { border-color: rgb(0 201 80 / .3); }
+.dark .banner--warning { border-color: rgb(255 105 0 / .3); }
+.dark .banner--info    { border-color: rgb(21 93 252 / .3); }
+
+/* Full-width job-status banner — §3.9 [EXACT] */
+.job-banner {
+  padding: var(--sg-space-4) var(--sg-space-6);
+  border-radius: var(--sg-radius-2xl);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sg-space-4); flex-wrap: wrap;
+  font-weight: var(--sg-weight-bold);
+}
+
+/* ==========================================================================
+   14. Modals — §3.6
+   --------------------------------------------------------------------------
+   DIVERGENCE (§3.11, §7.3), DECISION: FIXED. The web app's modals have no
+   role="dialog", no focus trapping and no Escape handling, and it uses
+   window.prompt() for the grade override and window.confirm() for
+   destructive actions. These are real dialogs; the trapping and Escape
+   handling live in app.js.
+   ========================================================================== */
+
+.modal-root { position: fixed; inset: 0; z-index: 50;
+              display: flex; align-items: center; justify-content: center;
+              padding: var(--sg-space-4); }
+.modal-root[hidden] { display: none; }
+
+.modal__scrim {
+  position: absolute; inset: 0;
+  background: rgb(0 0 0 / .5); backdrop-filter: blur(4px);
+  animation: sg-fade-in 200ms var(--sg-ease);
+}
+.modal__panel {
+  position: relative;
+  background: var(--sg-surface);
+  border-radius: var(--sg-radius-3xl);
+  width: 100%; max-width: 28rem;
+  padding: var(--sg-space-6);
+  box-shadow: var(--sg-shadow-2xl);
+  animation: sg-zoom-in-95 200ms var(--sg-ease);
+  max-height: calc(100vh - 2rem); overflow-y: auto;
+}
+@media (min-width: 640px) { .modal__panel { padding: var(--sg-space-8); } }
+.modal__panel--wide { max-width: 42rem; }
+.modal__head { display: flex; align-items: flex-start; justify-content: space-between;
+               gap: var(--sg-space-4); margin-bottom: var(--sg-space-6); }
+.modal__title { font-size: 1.25rem; font-weight: var(--sg-weight-black);
+                letter-spacing: var(--sg-tracking-tighter); }
+.modal__desc { color: var(--sg-text-muted); font-size: .875rem; margin-top: var(--sg-space-2); }
+.modal__foot { display: flex; gap: var(--sg-space-3); justify-content: flex-end;
+               margin-top: var(--sg-space-6); flex-wrap: wrap; }
+
+/* ==========================================================================
+   15. Utilities
+   ========================================================================== */
+
+.stack   > * + * { margin-top: var(--sg-space-4); }
+.stack-2 > * + * { margin-top: var(--sg-space-2); }
+.stack-6 > * + * { margin-top: var(--sg-space-6); }
+.row { display: flex; align-items: center; gap: var(--sg-space-3); flex-wrap: wrap; }
+.row--tight { gap: var(--sg-space-2); }
+.row--between { justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--sg-text-muted); }
+.faint { color: var(--sg-text-faint); }
+.mono  { font-family: var(--sg-font-mono); }
+.small { font-size: .875rem; }
+.tiny  { font-size: .75rem; }
+.bold  { font-weight: var(--sg-weight-bold); }
+.black { font-weight: var(--sg-weight-black); }
+.nowrap { white-space: nowrap; }
+.hidden { display: none !important; }
+
+.grid-2 { display: grid; gap: var(--sg-space-4); grid-template-columns: 1fr; }
+@media (min-width: 768px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+.grid-stats { display: grid; gap: var(--sg-space-4);
+              grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+
+.stat__value { font-size: 1.875rem; font-weight: var(--sg-weight-black);
+               letter-spacing: var(--sg-tracking-tighter); font-variant-numeric: tabular-nums; }
+.stat__label { font-size: 10px; font-weight: var(--sg-weight-black);
+               text-transform: uppercase; letter-spacing: var(--sg-tracking-widest);
+               color: var(--sg-text-faint); margin-top: var(--sg-space-1); }
+.stat--review .stat__value { color: var(--sg-red); }
+.stat--clean  .stat__value { color: var(--sg-on-green); }
+.stat--plag   .stat__value { color: var(--sg-amber-500); }
+
+/* Progress bar — §10 step 6 live progress */
+.progress-track {
+  height: .5rem; border-radius: 999px;
+  background: var(--sg-tint-neutral); overflow: hidden;
+}
+.progress-fill {
+  height: 100%; border-radius: 999px; background: var(--sg-red);
+  transition: width 400ms var(--sg-ease); width: 0;
+}
+.progress-fill--done { background: var(--sg-green-500); }
+.progress-fill--error { background: var(--sg-red); }
+
+/* Per-file duration trend — §11.5 / §10 step 6 */
+.trend { display: flex; align-items: flex-end; gap: 2px; height: 2.5rem; }
+.trend__bar {
+  flex: 1 1 auto; min-width: 2px; max-width: .75rem;
+  background: var(--sg-cyan); border-radius: 2px 2px 0 0;
+  opacity: .75; transition: height 300ms var(--sg-ease);
+}
+.trend__bar:last-child { opacity: 1; background: var(--sg-red); }
+
+.toast-region { position: fixed; bottom: var(--sg-space-6); left: 50%;
+                transform: translateX(-50%); z-index: 60;
+                display: flex; flex-direction: column; gap: var(--sg-space-2);
+                pointer-events: none; }
+.toast {
+  background: var(--sg-gray-900); color: #fff;
+  padding: var(--sg-space-3) var(--sg-space-6);
+  border-radius: var(--sg-radius-xl); box-shadow: var(--sg-shadow-xl);
+  font-weight: var(--sg-weight-bold); font-size: .875rem;
+  animation: sg-slide-in-from-top 300ms var(--sg-ease);
+}
+.dark .toast { background: var(--sg-gray-100); color: var(--sg-gray-900); }
