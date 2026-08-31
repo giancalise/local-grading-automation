@@ -165,6 +165,12 @@ hash Milestone 1 and Milestone 2 recorded.
 
 ### 2.3 Suites
 
+Both are committed under `tests/`, parameterised by `SG_BASE` / `SG_SUBS` /
+`SG_SOLUTION`, and re-run from those committed copies against a fresh grading
+run before this report was finalised. They need a live dev server holding a
+completed run, and SOLIDWORKS running; the file headers say how.
+
+
 - **`test_m3.py` — 36 checks, 36 passed.** Prerequisite fields; §15.3 across a
   run and across an open; path authorization (a path outside the run refused
   403, an empty path 400); the §12.6 file-moved path (404 with
@@ -338,6 +344,8 @@ it works either way. Worth knowing before writing more `IModelDoc2` code.
 | `ui/styles.css` | `+127` — detail panel, using existing tokens only |
 | `ui/index.html` | `+1` — one icon (`external-link`) |
 | `.gitignore` | `+8` — `output/` |
+| `tests/test_milestone3_row_actions.py` | new — the 36-check suite |
+| `tests/test_milestone2_regressions.py` | new — the 16-check suite |
 
 No new CSS custom properties, no new component vocabulary — the panel is built
 from the tokens and card/banner language `SOLIDGRADE_WEB_REFERENCE.md` §7.1

@@ -220,7 +220,15 @@ instructor: fix it first, or leave it and rely on the scratch copy.**
 
 Re-verify anything a change could plausibly touch. These were verified live in
 Milestone 2 against the frozen `.exe`, and re-verified in Milestone 3 against the
-source tree (`MILESTONE_3_REPORT.md` §2):
+source tree (`MILESTONE_3_REPORT.md` §2).
+
+**Two runnable suites cover most of this list** — `tests/test_milestone3_row_actions.py`
+(36 checks: the §15.3 invariant across both a run and an open, path
+authorization, the file-moved path, `locate_sources`) and
+`tests/test_milestone2_regressions.py` (16 checks: overrides, CSV, the voxel
+floor, the run gate, path validation). Both need a live dev server holding a
+completed run plus SOLIDWORKS; their headers say how. Run them before and after
+any change to `app.py`, `grade_assignment.py` or `sw_connection.py`.
 
 - **§15.3** student files byte-identical across a run, mtime untouched
   (`test_underdefined.SLDPRT` = `899c98038d1ee227b2d12d7194f0e2cb7c86148d9baeb4453c1776b264ef995f`).
