@@ -1,142 +1,164 @@
 # Next Session — Kickoff
 
-**Written:** 2026-08-31, at the end of the Milestone 1 session (walking skeleton
-+ post-milestone bugfixes). See `MILESTONE_1_REPORT.md` for the full record of
-what that session built, found, and verified.
+**Written:** 2026-08-31, at the end of the SolidGrade web app design & feature
+discovery session. That session produced `SOLIDGRADE_WEB_REFERENCE.md` and
+changed nothing else.
 
-This document has two parts: a recommendation on how to approach the
-SolidGrade web app design discovery, and a ready-to-paste prompt for starting
-that session in Claude Code.
+**Previous contents of this file** (the prompt for the discovery session) are
+superseded — that session is done. Its output is the reference document.
+
+This document has two parts: notes on how to approach the next session, and a
+ready-to-paste prompt.
 
 ---
 
-## Recommendation: treat the web app discovery as its own session
+## Recommendation: settle the shell question before styling anything
 
-Run this **before** any Milestone 2 UI-building work, and as its **own
-Claude Code session** — don't fold it into a build session. Reasons:
+The discovery pass is complete, so "build the real UI" is now unblocked. But
+there is a dependency the next session should not skip past:
 
-1. **This repo already has exactly this pattern, and it worked.**
-   `DISCOVERY_REPORT.md` was a dedicated static-analysis pass over the
-   grading pipeline, done before `SPEC_v0.2_SolidGrade_Desktop.md` was
-   written, done before any Milestone 1 code was touched. It kept each
-   session focused and produced a document later sessions could just read
-   instead of re-deriving. The same shape fits here: study the web app,
-   write down what's there, *then* build against that writeup.
-2. **It's a different kind of work from engineering.** Milestone 2's build
-   work is "make live SolidWorks do the right thing, verified against a real
-   COM connection." This is "look at an existing product and accurately
-   describe its design system and feature set." Mixing them in one session
-   means whichever one starts first gets more attention.
-3. **The output is reusable.** A written design/feature reference gets read
-   by every future UI-touching milestone (§5 home, §10 wizard, §12 results,
-   §3 status all still need building). Worth getting it right once.
+**`MILESTONE_1_REPORT.md` item 1 — browser tab vs. real application window —
+has to be decided before the UI shell gets built, not after.** The reference
+document's §4.1 describes a persistent app shell: a 288px sidebar, a sticky
+64/80px header, a centered 1280px content column. Whether that shell lives in
+a browser tab or a webview window changes how it's built (window chrome, menu
+bar, close/minimize behavior, what "refresh" even means). Building the styled
+UI first and then changing the shell means doing the layout work twice.
 
-**What the output should be:** a new document — suggested name
-`SOLIDGRADE_WEB_REFERENCE.md` — sitting next to `DISCOVERY_REPORT.md` and
-`SPEC_v0.2_SolidGrade_Desktop.md`, containing:
+The instructor independently asked for "its own window, not in a browser," and
+the still-undiagnosed "refreshing the browser loses the app" bug would be
+structurally solved by a real window. That makes this the natural first move of
+the next session — but the report is explicit that the root cause was never
+diagnosed, and warns against a guessed fix. **Diagnose first, then decide.**
 
-- **Design tokens**: exact colors (hex values, not "blue"), typography
-  (font family, sizes, weights), spacing scale, border radii, shadows —
-  pulled from real CSS/theme files if source is available, not eyeballed
-  from screenshots.
-- **Component patterns**: what buttons, cards, tables, forms, nav bars, and
-  status indicators look like and how they behave (hover states, disabled
-  states, etc.).
-- **Layout and navigation structure**: how screens relate to each other, what
-  the persistent chrome is (header, sidebar, etc.), how the user moves
-  between assignments/results/settings.
-- **A full feature/capability inventory**: what the web app actually does,
-  screen by screen — this matters as much as the visuals, so nothing built
-  later accidentally omits something the instructor already relies on.
+## Open decisions that need the instructor, not a default
 
-**On access — quality depends heavily on what's provided, in this order:**
+`SOLIDGRADE_WEB_REFERENCE.md` §7.2 lists seven places where the web app and the
+desktop app disagree, or where the web app does something that looks
+unintentional. **These need answers, not assumptions.** The two that carry real
+engineering consequence:
 
-1. **Best: the web app's actual source code** (a repo link, or a copy dropped
-   next to this project). Exact CSS/component values, and the real feature
-   set is readable directly rather than inferred.
-2. **Good: a live URL** the agent can open in a browser, click through, and
-   screenshot. Real interaction behavior, but colors/spacing have to be
-   estimated from renders rather than read exactly.
-3. **Weak: screenshots plus a description.** Usable, but expect drift from
-   the real thing.
+- **`voxelResolution`: the web app requests 48, Milestone 1 ran at 64.** This
+  changes grading output. Someone has to say which is authoritative.
+- **`solutionStoragePath` is written in two different shapes** depending on
+  which "Auto Grade" button the instructor pressed in the web app. Any desktop
+  client consuming `grading_jobs` has to handle both, or the web app has to be
+  fixed — and fixing the web app is out of this repo's scope.
 
-If both (1) and (2) are available, provide both — code for precision, the
-live app for anything that only shows up in interaction (loading states,
-transitions, empty states).
+The other five (primary-button hover hue, missing secondary-button borders,
+animations that never run, dark-mode red `<h1>`, and whether the desktop app
+should match the Grading Automation page's description of itself) are design
+and product calls. The next session should surface them early rather than
+silently picking one.
+
+## What must not regress
+
+Milestone 1 verified seven correctness properties live, on the frozen `.exe`
+(see `MILESTONE_1_REPORT.md` → "Verification results"). A UI-building session
+is exactly the kind of session that breaks them by accident. The
+non-negotiables:
+
+- **Student files stay byte-identical** across a run (§15.3) — hashed and
+  verified across five runs.
+- **Read-only opens; three-state checks that return `null`, never `0`, on
+  genuine failure.**
+- **The status indicator must not launch SolidWorks as a side effect of
+  checking whether it's running** — this genuinely regressed once already and
+  had to be fixed.
+- **Shut Down still releases COM handles, stops the popup dismisser, and
+  restores mutated STL preferences before exiting.**
 
 ---
 
 ## The prompt
 
-Paste the block below to start the next session. Fill in the bracketed
-access details before sending.
+Paste the block below to start the next session.
 
 ```
-Claude Code Session — SolidGrade Web App Design & Feature Discovery
+Claude Code Session — SolidGrade Desktop, Milestone 2: the real UI
 
-This session is preparation for Milestone 2 of SolidGrade Desktop, not a
-build session. Do not write any application code and do not modify
-SPEC_v0.2_SolidGrade_Desktop.md. The goal is a single new reference document.
+This is a build session. Read these three documents before writing code:
+SOLIDGRADE_WEB_REFERENCE.md (the design and feature authority for how this app
+should look and what it must not omit), MILESTONE_1_REPORT.md (what exists,
+what was verified live, and what's still broken), and the relevant sections of
+SPEC_v0.2_SolidGrade_Desktop.md (§3 status, §5 home, §10 wizard, §12 results).
 
-Context: SolidGrade Desktop (this repo) currently has a bare-bones,
-deliberately unstyled single screen (see MILESTONE_1_REPORT.md — Step 5).
-The instructor has an existing product, a web app called "SolidGrade," whose
-look, feel, button style, color scheme, and navigation the desktop app's real
-UI (built in Milestone 2+) needs to match. This session's job is to study
-that web app and write down everything a future build session needs to
-reproduce it faithfully — colors, typography, component patterns, layout,
-navigation, and its full feature set — so nothing gets guessed or invented
-later.
+Where SOLIDGRADE_WEB_REFERENCE.md gives an exact value, use it. It labels every
+value [EXACT], [TW-DEFAULT], or [DERIVED] — treat those labels as load-bearing
+and don't silently upgrade a [DERIVED] inference into a fact. §8 has the whole
+token set already resolved as CSS custom properties; there is no build step in
+this app, so that's the intended path rather than a Tailwind toolchain.
 
-Access to the SolidGrade web app: [PASTE REPO LINK, OR NOTE THAT SOURCE HAS
-BEEN COPIED INTO THIS REPO AT <path>, AND/OR PASTE A LIVE URL HERE]
+Start here, in this order:
 
-Deliverable: SOLIDGRADE_WEB_REFERENCE.md at the repo root, covering:
-1. Design tokens — exact color hex values, typography (family/sizes/weights),
-   spacing scale, border radii, shadows. Pull these from real CSS/theme
-   source if available; only estimate from screenshots as a last resort, and
-   say clearly when you're estimating versus reading an exact value.
-2. Component patterns — buttons (all states: default/hover/disabled/etc.),
-   cards, tables, forms, navigation elements, status/badge indicators.
-3. Layout and navigation structure — persistent chrome, how screens relate,
-   how a user moves between them.
-4. A full feature/capability inventory, screen by screen — what the web app
-   actually does today. This matters as much as the visuals: Milestone 2
-   should not accidentally drop something the instructor already relies on.
+1. Diagnose "refreshing the browser loses the app." Find out whether the
+   background server is actually exiting or whether the browser is just losing
+   the port. Do not guess — MILESTONE_1_REPORT.md is explicit about this.
 
-If you're given the web app's source code, read it directly rather than
-inferring from rendered output — exact values over eyeballed ones. If you're
-given a live URL, use the browser tool to click through every screen and
-state you can reach, including edge cases like empty states and error states,
-not just the happy path.
+2. Then decide, with me, browser tab vs. a real standalone window (webview
+   shell). I've asked for "its own window, not in a browser." This decision
+   determines how the app shell in SOLIDGRADE_WEB_REFERENCE.md §4.1 gets built,
+   so settle it before building the shell, not after.
 
-Do not attempt to build or modify anything in SolidGrade Desktop this
-session. If you notice something in this repo that the design reference will
-need to interact with, note it in the new document rather than changing code.
+3. Ask me about the open decisions in SOLIDGRADE_WEB_REFERENCE.md §7.2 before
+   assuming defaults. The voxelResolution disagreement (web app says 48,
+   Milestone 1 ran at 64) and the two different solutionStoragePath shapes both
+   affect grading behavior, not just appearance.
+
+4. Then build the real UI, replacing the deliberately-unstyled Step 5 screen:
+   the persistent shell (§4.1), the System Ready status surface (§3), the
+   pick-and-run flow (§5/§10), and the results view (§12) — styled per the
+   reference. Reuse the existing Flask endpoints in app.py (/healthz,
+   /api/self_test, /api/status, /api/launch_sw, /api/pick_folder,
+   /api/pick_file, /api/run_grading, /api/run_status, /api/shutdown) rather
+   than redesigning the API alongside the UI.
+
+Two things the reference calls out specifically for this app:
+
+- File selection uses native tkinter pickers, not browser file inputs, because
+  student files are referenced and never copied (SPEC §13). The web app's
+  drag-and-drop dropzone pattern should become a *path picker* wearing the same
+  visual clothes — dashed 2px border, rounded-2xl, idle/hover/chosen states,
+  green when populated — not a literal drop target.
+- The web app has real accessibility gaps (no focus indicators anywhere,
+  window.prompt() for grade overrides, aria-label used exactly once in the
+  entire app). Reference §7.3 lists them. Match the web app's *look*, but don't
+  reproduce those — fix them here.
+
+Do not regress what Milestone 1 verified live: student files stay byte-identical
+across a run (§15.3), opens stay read-only, three-state checks return null and
+never 0 on genuine failure, the status check must not launch SolidWorks as a
+side effect, and Shut Down still releases COM handles, stops the popup
+dismisser, and restores STL preferences before exiting. Re-verify the ones your
+changes could plausibly touch before calling the session done.
+
+Ask me before starting if anything above conflicts with what you find in the
+repo.
 ```
 
 ---
 
-## Everything else on the list, for after this discovery session
+## Everything else on the list, for after the UI work
 
-This is the same priority order given to the instructor in chat, kept here
-for reference. Full detail on each is in `MILESTONE_1_REPORT.md` under
-"Post-milestone: first real-user testing" and "What Milestone 2 should be."
+Unchanged in substance from `MILESTONE_1_REPORT.md` → "What Milestone 2 should
+be," with the two completed items removed. Full detail on each is in that
+document.
 
-1. Diagnose and fix "refreshing the browser loses the app"; decide whether
-   the app should become a real standalone window instead of a browser tab
-   (the instructor raised this independently — worth taking seriously, since
-   it would also structurally fix the refresh bug).
-2. Build the real UI to match SolidGrade's existing look and feel — this is
-   what the discovery session above unblocks.
-3. Fix `sw_timeout.py` for real and wire up §11.3 timeout handling — right
-   now a genuine SolidWorks stall during grading still hangs the app forever.
-4. Run one real multi-student batch (not just one file at a time) to see how
-   the app holds up over a longer, real-sized run.
-5. Build §9 — submission ingestion and attribution. The largest remaining
-   piece of unbuilt work, and the spec's own highest-risk subsystem.
-6. Smaller reliability items: checkpointing (§11.1), a dedicated COM worker
-   thread instead of the current lock-based mitigation, surfacing the popup
-   dismisser's new diagnostics in the status UI, and the one remaining
-   diagnostic script (`diag_export.py`) not yet re-run on this machine's
-   SolidWorks edition.
+1. **Fix `sw_timeout.py` for real, then wire up §11.3.** Still the single
+   highest-value piece of unfinished correctness work — a genuine COM stall
+   hangs the app forever with no recovery. Two credible designs are described
+   in the report; both must be verified against live SolidWorks, not by static
+   review.
+2. **One real multi-student, multi-minute batch run.** This session's grading
+   was always one file at a time, so the R-7 degradation question is
+   corroborated but not resolved.
+3. **§9 ingestion and attribution** — entirely unbuilt, and the spec's own
+   highest-risk subsystem.
+4. **§11.1 checkpointing** — small, and unblocks safely testing longer runs.
+5. **A dedicated COM worker thread/queue**, replacing the current global-lock
+   mitigation in `app.py`.
+6. **Surface `popup_dismisser`'s `dismissal_count` and `check_integrity_parity()`
+   in the System Ready indicator** (§15.6) — both built, neither wired up. The
+   new status UI is the natural place for them.
+7. **Re-run `diag_export.py`** on this machine's SolidWorks edition — the last
+   §16.2 validation piece not yet exercised directly.
