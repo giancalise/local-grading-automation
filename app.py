@@ -3,17 +3,35 @@ app.py
 ------
 SolidGrade Desktop — packaged application entry point.
 
-Implements the Milestone 1 walking skeleton per SPEC_v0.2:
+Implements, per SPEC_v0.2:
   §1   Platform & runtime (launch, port collision, shutdown)
   §2.4 Startup self-test
   §3   System Ready indicator (runtime + SolidWorks rows, Launch button)
-  §10  Minimal run: folder/file pickers, run button, live progress
-  §12  Raw JSON dump of results (no table — that's a later milestone)
+  §10  Run wizard: native pickers, criteria, live check, live progress
+  §12  Results table, three-state checks, overrides, CSV export
 
-Everything NOT in this list (assignments, rosters, ingestion/attribution,
-results table, overrides, checkpointing, criteria config UI, thumbnails,
-export/import, the 24-permutation search, performance work) is explicitly
-out of scope for this milestone — see MILESTONE_1_REPORT.md.
+Milestone 2 changed three things about how this file is shaped:
+
+1. The UI moved out of the inline INDEX_HTML string into ui/, styled per
+   SOLIDGRADE_WEB_REFERENCE.md. Served by index()/ui_asset() below.
+
+2. The window. Milestone 1 called webbrowser.open() and lived in a browser
+   tab, which produced two problems found live: the page kept the picked
+   paths only in JS memory so a refresh appeared to "lose the app" (the
+   server had lost nothing — an instance from 2026-08-29 was still up and
+   holding a complete 26-student run when this was diagnosed), and every
+   launch opened another tab that never closed, leaving five throttled
+   pollers and a server nothing ever shut down. run_window() now opens a
+   real webview window whose lifetime IS the app's lifetime, and falls
+   back to the browser if a webview cannot be created.
+
+3. Three additive endpoints the styled UI needs and Milestone 1 had no
+   use for: /api/validate_paths, /api/override, /api/export_csv. Every
+   pre-existing endpoint kept its exact request and response shape.
+
+Still out of scope and deliberately unbuilt: §9 ingestion/attribution,
+assignment/roster models, §11.1 checkpointing, thumbnails, the
+24-permutation search, and §12.6's inline SolidWorks actions.
 """
 
 from __future__ import annotations
@@ -38,7 +56,7 @@ if getattr(sys, "frozen", False) and (sys.stdout is None or sys.stderr is None):
     sys.stdout = _log_file
     sys.stderr = _log_file
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 import self_test as self_test_module
 import sw_detect
@@ -56,6 +74,10 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 _state = {
     "self_test": None,
+    # Where the current run's artifacts live, so /api/override and
+    # /api/export_csv write back to what the run actually produced.
+    "result_path": None,
+    "output_folder": None,
     "run": {
         "status": "idle",   # idle | running | complete | error
         "current": 0,
@@ -255,7 +277,91 @@ def api_pick_file():
 # Run grading (§10)
 # ---------------------------------------------------------------------------
 
-def _run_grading_thread(students_folder: str, solution_path: str, output_folder: str, assignment_name: str):
+SLDPRT_EXTS = (".sldprt",)
+
+
+def results_root() -> str:
+    """
+    Where grading results are written.
+
+    Milestone 1 put this at `dirname(sys.executable)/output`, which for a
+    frozen build is INSIDE dist/SolidGradeDesktop2/. That directory is
+    owned by the build: PyInstaller's COLLECT step deletes and recreates it
+    on every rebuild, and any installer would replace it on every update.
+    Grading results are not build artifacts and must not live somewhere a
+    rebuild can erase them. (This is not hypothetical — a Milestone 2
+    rebuild destroyed a real 26-student run's STL set exactly this way.)
+
+    Frozen builds therefore write to %LOCALAPPDATA%\\SolidGrade\\output,
+    which no rebuild or reinstall touches. Running from source keeps the
+    repo-relative output/ folder, which is convenient during development
+    and is not in the path of any build step.
+    """
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "SolidGrade", "output")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+
+def resolve_solution_path(raw: str) -> tuple[str | None, str | None]:
+    """
+    Resolve a solution reference to a concrete .SLDPRT file path.
+
+    Returns (path, error). Exactly one is non-None.
+
+    SOLIDGRADE_WEB_REFERENCE.md §6.3 records that the web app writes
+    `solutionStoragePath` in TWO different shapes depending on which button
+    the instructor pressed: AssignmentDetail sends the first problem's
+    concrete `solidworksFileUrl`, while GradingPage sends the bare folder
+    prefix `solutions/{id}/` (its own comment says "Placeholder, adjust as
+    needed"). A client consuming those jobs therefore receives two shapes
+    for one field. DECISION (Milestone 2): accept both, defensively —
+    a file is used directly; a directory is resolved to the single .SLDPRT
+    inside it, and zero-or-many is a clear error rather than a guess.
+
+    This also makes the native picker forgiving: an instructor who points
+    the solution picker at a folder holding one part gets the sensible
+    result instead of a validation failure.
+    """
+    if not raw:
+        return None, "No solution file was chosen."
+
+    if os.path.isfile(raw):
+        if not raw.lower().endswith(SLDPRT_EXTS):
+            return None, f"The solution must be a .SLDPRT file: {os.path.basename(raw)}"
+        return raw, None
+
+    if os.path.isdir(raw):
+        parts = [
+            os.path.join(raw, n) for n in sorted(os.listdir(raw))
+            if n.lower().endswith(SLDPRT_EXTS) and os.path.isfile(os.path.join(raw, n))
+        ]
+        if len(parts) == 1:
+            return parts[0], None
+        if not parts:
+            return None, f"No .SLDPRT file found in the solution folder: {raw}"
+        # SPEC §10 step 1 / §15.2: exact match or fail. No regex fallback,
+        # and no picking the alphabetically-first file and hoping.
+        return None, (
+            f"The solution folder holds {len(parts)} .SLDPRT files; it must hold "
+            f"exactly one. Choose the specific solution part instead."
+        )
+
+    return None, f"Solution file not found: {raw}"
+
+
+def count_student_parts(folder: str) -> int:
+    try:
+        return sum(
+            1 for n in os.listdir(folder)
+            if n.lower().endswith(SLDPRT_EXTS) and os.path.isfile(os.path.join(folder, n))
+        )
+    except OSError:
+        return 0
+
+
+def _run_grading_thread(students_folder: str, solution_path: str, output_folder: str,
+                        assignment_name: str, voxel_resolution: int):
     def on_progress(p: dict):
         with _run_lock:
             _state["run"].update({
@@ -275,6 +381,7 @@ def _run_grading_thread(students_folder: str, solution_path: str, output_folder:
                 output_folder=output_folder,
                 assignment_name=assignment_name,
                 progress_callback=on_progress,
+                voxel_resolution=voxel_resolution,
             )
         result_path = os.path.join(output_folder, f"{assignment_name}_grades.json")
         with open(result_path, "r", encoding="utf-8") as f:
@@ -282,6 +389,10 @@ def _run_grading_thread(students_folder: str, solution_path: str, output_folder:
         with _run_lock:
             _state["run"]["status"] = "complete"
             _state["run"]["result"] = result_json
+            # Remembered so /api/override and /api/export_csv write back to
+            # the same artifact the run produced, rather than guessing at it.
+            _state["result_path"] = result_path
+            _state["output_folder"] = output_folder
     except Exception as exc:
         with _run_lock:
             _state["run"]["status"] = "error"
@@ -301,25 +412,51 @@ def api_run_grading():
 
     if not students_folder or not os.path.isdir(students_folder):
         return jsonify({"error": f"Students folder not found: {students_folder}"}), 400
-    if not solution_path or not os.path.isfile(solution_path):
-        return jsonify({"error": f"Solution file not found: {solution_path}"}), 400
+    if count_student_parts(students_folder) == 0:
+        # Otherwise this starts a run that grades nobody and reports success.
+        return jsonify({"error": (
+            f"No .SLDPRT files in the submissions folder: {students_folder}"
+        )}), 400
+
+    solution_path, solution_error = resolve_solution_path(solution_path)
+    if solution_error:
+        return jsonify({"error": solution_error}), 400
+
+    # SPEC_v0.2 §7.4 / D3: hard floor of 64 — resolution is a criteria
+    # field, not a speed lever, and §7.5 marks the form check "valid only at
+    # resolution >= 64". The web app's grading_jobs documents currently ask
+    # for 48 (SOLIDGRADE_WEB_REFERENCE.md §6.3); anything below the floor is
+    # refused here rather than quietly producing an invalid form score.
+    raw_voxel = data.get("voxel_resolution", 64)
+    try:
+        voxel_resolution = int(raw_voxel)
+    except (TypeError, ValueError):
+        return jsonify({"error": f"Voxel resolution must be a whole number, got {raw_voxel!r}."}), 400
+    if voxel_resolution < 64:
+        return jsonify({"error": (
+            f"Voxel resolution {voxel_resolution} is below the hard floor of 64 "
+            f"(SPEC §7.4). The form score is only valid at 64 or above."
+        )}), 400
 
     status = sw_detect.is_running()
     if not status["running"]:
         return jsonify({"error": "SolidWorks is not running. Launch it before grading."}), 409
 
-    app_dir = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
-    output_folder = os.path.join(app_dir, "output", assignment_name)
+    output_folder = os.path.join(results_root(), assignment_name)
 
     with _run_lock:
         _state["run"] = {
             "status": "running", "current": 0, "total": 0, "filename": None,
             "elapsed_s": 0, "file_seconds": None, "result": None, "error": None,
         }
+        # Drop the previous run's artifact paths so an override can never
+        # be written into the wrong assignment's grades file.
+        _state["result_path"] = None
+        _state["output_folder"] = None
 
     t = threading.Thread(
         target=_run_grading_thread,
-        args=(students_folder, solution_path, output_folder, assignment_name),
+        args=(students_folder, solution_path, output_folder, assignment_name, voxel_resolution),
         daemon=True,
     )
     t.start()
@@ -330,6 +467,208 @@ def api_run_grading():
 def api_run_status():
     with _run_lock:
         return jsonify(dict(_state["run"]))
+
+
+# ---------------------------------------------------------------------------
+# Additive endpoints (Milestone 2). None of the endpoints above changed
+# shape; these add three things the styled UI needs and the Milestone 1
+# screen had no use for.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/validate_paths", methods=["POST"])
+def api_validate_paths():
+    """
+    Re-check paths the UI restored from localStorage after a page load.
+
+    Without this, a restored path that has since been moved or deleted
+    would render in the picker's green "chosen" state and the instructor
+    would only discover it was wrong when they pressed Run — after
+    committing to a run. Cheap to check, so check it.
+    """
+    data = request.get_json(force=True) or {}
+    out = {"solution": None, "students_folder": None}
+
+    raw_solution = data.get("solution_path")
+    if raw_solution:
+        resolved, error = resolve_solution_path(raw_solution)
+        out["solution"] = False if error else {"path": resolved}
+
+    folder = data.get("students_folder")
+    if folder:
+        out["students_folder"] = (
+            {"part_count": count_student_parts(folder)} if os.path.isdir(folder) else False
+        )
+
+    return jsonify(out)
+
+
+def _find_student(students: list, username: str, filename: str | None):
+    for s in students:
+        if (s.get("username") or s.get("uid")) == username:
+            return s
+    if filename:
+        for s in students:
+            if s.get("filename") == filename:
+                return s
+    return None
+
+
+@app.route("/api/override", methods=["POST"])
+def api_override():
+    """
+    Set or clear a manual grade override — SPEC_v0.2 §12.4.
+
+    §12.4 requires `computed` and `override` be stored as an EXPLICIT PAIR
+    and never mutated in place, so the auto-generated value is always
+    retrievable. That is exactly what happens here: grade.total and the
+    four per-check point values are never touched; only override,
+    override_note and override_by are written. Sending override=null
+    reverts (the one-click revert §12.4 asks for).
+
+    The result JSON on disk is updated too, so an override survives a
+    restart — the schema already reserves these three fields
+    (SOLIDGRADE_WEB_REFERENCE.md §6.4), they were simply never written by
+    anything until now.
+    """
+    data = request.get_json(force=True) or {}
+    username = data.get("username")
+    if not username:
+        return jsonify({"error": "No student identified."}), 400
+
+    override = data.get("override")
+    if override is not None:
+        try:
+            override = float(override)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"Override must be a number, got {override!r}."}), 400
+        if not (0 <= override <= 100):
+            return jsonify({"error": "Override must be between 0 and 100."}), 400
+
+    with _run_lock:
+        result = _state["run"].get("result")
+        if not result or not result.get("students"):
+            return jsonify({"error": "No results are loaded."}), 409
+
+        student = _find_student(result["students"], username, data.get("filename"))
+        if student is None:
+            return jsonify({"error": f"No student named {username} in these results."}), 404
+
+        grade = student.setdefault("grade", {})
+        grade["override"] = override
+        grade["override_note"] = data.get("override_note") if override is not None else None
+        grade["override_by"] = "desktop" if override is not None else None
+
+        result_path = _state.get("result_path")
+        snapshot = json.loads(json.dumps(result))
+        student_copy = json.loads(json.dumps(student))
+
+    # Write outside the lock — the grading thread only touches _state["run"]
+    # under it, and a slow disk should not block a status poll.
+    if result_path:
+        try:
+            tmp = f"{result_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, default=str)
+            os.replace(tmp, result_path)   # atomic; never a half-written grade file
+        except Exception as exc:
+            return jsonify({"error": f"Override applied in memory but not saved: {exc}",
+                            "student": student_copy}), 500
+
+    return jsonify({"student": student_copy})
+
+
+CSV_COLUMNS = [
+    "username", "filename", "sw_author", "last_saved_date",
+    "shape_status", "shape_score", "volume_status", "volume_mm3",
+    "material_status", "material", "mass_kg",
+    "sketches_status", "underdefined_sketches",
+    "shape_points", "volume_points", "material_points", "sketch_points",
+    "computed_total", "override", "override_note", "override_by", "effective_total",
+    "plagiarism", "plagiarism_with", "needs_review", "error",
+]
+
+
+@app.route("/api/export_csv", methods=["POST"])
+def api_export_csv():
+    """
+    SPEC_v0.2 §12.7 — CSV of the full table INCLUDING computed values,
+    overrides and override markers. (§12.7 also says: no xlsx.)
+
+    grade_assignment.py already writes a CSV of its own, but that one is
+    produced before any override exists and has no column for them, which
+    is precisely what §12.7 asks for. Written server-side rather than
+    offered as a browser download because the webview shell blocks
+    page-initiated downloads; the instructor gets a real path on disk.
+    """
+    import csv as _csv
+
+    with _run_lock:
+        result = _state["run"].get("result")
+        if not result or not result.get("students"):
+            return jsonify({"error": "No results to export."}), 409
+        snapshot = json.loads(json.dumps(result))
+        output_folder = _state.get("output_folder")
+        result_path = _state.get("result_path")
+
+    if output_folder:
+        target_dir = output_folder
+    elif result_path:
+        target_dir = os.path.dirname(result_path)
+    else:
+        target_dir = os.path.dirname(sys.executable if getattr(sys, "frozen", False)
+                                     else os.path.abspath(__file__))
+
+    name = snapshot.get("assignmentName") or "SolidGrade_Run"
+    safe = "".join(c for c in name if c.isalnum() or c in "-_ ").strip() or "SolidGrade_Run"
+    path = os.path.join(target_dir, f"{safe}_grades_reviewed.csv")
+
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+            w.writeheader()
+            for s in snapshot["students"]:
+                grade = s.get("grade") or {}
+                checks = s.get("checks") or {}
+                flags = s.get("flags") or {}
+                override = grade.get("override")
+                computed = grade.get("total")
+                sketches = checks.get("underdefined_sketches") or []
+                w.writerow({
+                    "username": s.get("username") or s.get("uid"),
+                    "filename": s.get("filename"),
+                    "sw_author": s.get("sw_author"),
+                    "last_saved_date": s.get("last_saved_date"),
+                    "shape_status": checks.get("shape_status"),
+                    "shape_score": checks.get("shape_score"),
+                    "volume_status": checks.get("volume_status"),
+                    "volume_mm3": checks.get("volume_mm3"),
+                    "material_status": checks.get("material_status"),
+                    "material": checks.get("material"),
+                    "mass_kg": checks.get("mass_kg"),
+                    "sketches_status": checks.get("sketches_status"),
+                    "underdefined_sketches": "; ".join(sketches),
+                    "shape_points": grade.get("shape_points"),
+                    "volume_points": grade.get("volume_points"),
+                    "material_points": grade.get("material_points"),
+                    "sketch_points": grade.get("sketch_points"),
+                    # The computed/override pair is preserved as a pair in
+                    # the export too — §12.4's "the original is always
+                    # retrievable" has to survive leaving the app.
+                    "computed_total": computed,
+                    "override": override,
+                    "override_note": grade.get("override_note"),
+                    "override_by": grade.get("override_by"),
+                    "effective_total": computed if override is None else override,
+                    "plagiarism": flags.get("plagiarism"),
+                    "plagiarism_with": flags.get("plagiarism_with"),
+                    "needs_review": flags.get("needs_review"),
+                    "error": s.get("error"),
+                })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"path": path})
 
 
 # ---------------------------------------------------------------------------
@@ -367,174 +706,67 @@ def api_shutdown():
         os._exit(0)
 
     threading.Thread(target=_die, daemon=True).start()
-    return jsonify({"status": "SolidGrade has shut down. You can safely close this tab."})
+
+    # SPEC_v0.2 §1.2 mandates this exact string:
+    #   "SolidGrade has shut down. You can safely close this tab."
+    # It was written when the UI was a browser tab, and it is still exactly
+    # right in the browser-fallback path, so that path returns it verbatim.
+    # In the webview shell there is no tab — the window is the app and it
+    # goes away with the process — so telling the instructor to close a tab
+    # would be an instruction they cannot follow. Reality differs from the
+    # spec here only because the shell changed; see MILESTONE_2_REPORT.md.
+    message = (
+        "SolidGrade has shut down."
+        if _window is not None
+        else "SolidGrade has shut down. You can safely close this tab."
+    )
+    return jsonify({"status": message})
 
 
 # ---------------------------------------------------------------------------
-# UI (deliberately minimal — Step 5 of Milestone 1, not a design pass)
+# UI — Milestone 2. Static files under ui/, styled per
+# SOLIDGRADE_WEB_REFERENCE.md. Replaces Milestone 1's deliberately-unstyled
+# inline INDEX_HTML string.
 # ---------------------------------------------------------------------------
+
+def _resource_path(*parts: str) -> str:
+    """
+    Locate a bundled resource in both the dev tree and a PyInstaller build.
+    onedir puts --add-data next to the exe; onefile unpacks to _MEIPASS.
+    """
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+        candidate = os.path.join(base, *parts)
+        if os.path.exists(candidate):
+            return candidate
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return os.path.join(meipass, *parts)
+        return candidate
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), *parts)
+
 
 @app.route("/")
 def index():
-    return INDEX_HTML
+    return send_from_directory(_resource_path("ui"), "index.html")
 
 
-INDEX_HTML = """<!doctype html>
-<html>
-<head><title>SolidGrade Desktop</title></head>
-<body style="font-family: sans-serif; max-width: 900px; margin: 2em auto;">
-<h1>SolidGrade Desktop <small style="color:#888">(walking skeleton)</small></h1>
+@app.route("/ui/<path:filename>")
+def ui_asset(filename: str):
+    # send_from_directory refuses traversal outside the directory itself.
+    return send_from_directory(_resource_path("ui"), filename)
 
-<div id="ready-pill" style="padding:8px; border:1px solid #ccc; margin-bottom:1em;">
-  Checking status...
-</div>
-<button onclick="expandStatus()">Details</button>
-<button id="launch-btn" onclick="launchSW()" style="display:none;">Launch SolidWorks</button>
-<pre id="status-detail" style="display:none; background:#f0f0f0; padding:1em;"></pre>
 
-<hr>
+@app.after_request
+def _no_store(resp):
+    # A stale cached app.js/styles.css inside an embedded webview is very
+    # hard to diagnose from the outside — the window just looks wrong with
+    # no way to hard-reload. The payloads are a few tens of KB from
+    # localhost, so caching buys nothing here.
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
-<h2>Grade a folder</h2>
-<div>
-  <button onclick="pickSolution()">Pick solution .SLDPRT</button>
-  <span id="solution-path">(none selected)</span>
-</div>
-<div>
-  <button onclick="pickFolder()">Pick student folder</button>
-  <span id="folder-path">(none selected)</span>
-</div>
-<div>
-  Assignment name: <input id="assignment-name" value="SolidGrade_Run">
-</div>
-<div>
-  <button id="run-btn" onclick="runGrading()" disabled>Run</button>
-</div>
 
-<h3>Progress</h3>
-<pre id="progress">(not running)</pre>
-
-<h3>Raw result JSON</h3>
-<pre id="result-json">(no results yet)</pre>
-
-<hr>
-<button onclick="shutdown()" style="background:#c00; color:white;">Shut Down</button>
-<div id="shutdown-msg"></div>
-
-<script>
-let solutionPath = null;
-let folderPath = null;
-let systemReady = false;
-
-async function refreshStatus() {
-  const r = await fetch('/api/status');
-  const s = await r.json();
-  systemReady = s.ready;
-  const pill = document.getElementById('ready-pill');
-  const launchBtn = document.getElementById('launch-btn');
-  if (s.ready) {
-    pill.style.background = '#cfc';
-    pill.textContent = 'System Ready';
-    launchBtn.style.display = 'none';
-  } else {
-    pill.style.background = '#fcc';
-    pill.textContent = 'Not Ready — ' +
-      (!s.runtime.self_test_passed ? 'self-test failed' :
-       !s.solidworks.running ? 'SolidWorks not running' : 'unknown');
-    launchBtn.style.display = s.solidworks.installed && !s.solidworks.running ? 'inline' : 'none';
-  }
-  document.getElementById('status-detail').textContent = JSON.stringify(s, null, 2);
-  document.getElementById('run-btn').disabled = !systemReady || !solutionPath || !folderPath;
-}
-
-function expandStatus() {
-  const el = document.getElementById('status-detail');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-async function launchSW() {
-  document.getElementById('ready-pill').textContent = 'Launching SolidWorks...';
-  await fetch('/api/launch_sw', {method: 'POST'});
-  pollUntilReady();
-}
-
-function pollUntilReady() {
-  const iv = setInterval(async () => {
-    await refreshStatus();
-    if (systemReady) clearInterval(iv);
-  }, 3000);
-}
-
-async function pickSolution() {
-  const r = await fetch('/api/pick_file', {method: 'POST'});
-  const d = await r.json();
-  if (d.path) {
-    solutionPath = d.path;
-    document.getElementById('solution-path').textContent = d.path;
-  }
-  refreshStatus();
-}
-
-async function pickFolder() {
-  const r = await fetch('/api/pick_folder', {method: 'POST'});
-  const d = await r.json();
-  if (d.path) {
-    folderPath = d.path;
-    document.getElementById('folder-path').textContent = d.path;
-  }
-  refreshStatus();
-}
-
-async function runGrading() {
-  const assignmentName = document.getElementById('assignment-name').value || 'SolidGrade_Run';
-  const r = await fetch('/api/run_grading', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      students_folder: folderPath,
-      solution_path: solutionPath,
-      assignment_name: assignmentName,
-    }),
-  });
-  const d = await r.json();
-  if (d.error) {
-    alert(d.error);
-    return;
-  }
-  document.getElementById('run-btn').disabled = true;
-  pollRunStatus();
-}
-
-function pollRunStatus() {
-  const iv = setInterval(async () => {
-    const r = await fetch('/api/run_status');
-    const s = await r.json();
-    document.getElementById('progress').textContent =
-      `${s.status} — file ${s.current}/${s.total}: ${s.filename || ''} ` +
-      `(last file ${s.file_seconds ?? '?'}s, elapsed ${s.elapsed_s}s)`;
-    if (s.status === 'complete') {
-      document.getElementById('result-json').textContent = JSON.stringify(s.result, null, 2);
-      document.getElementById('run-btn').disabled = false;
-      clearInterval(iv);
-    } else if (s.status === 'error') {
-      document.getElementById('result-json').textContent = 'ERROR: ' + s.error;
-      document.getElementById('run-btn').disabled = false;
-      clearInterval(iv);
-    }
-  }, 1000);
-}
-
-async function shutdown() {
-  const r = await fetch('/api/shutdown', {method: 'POST'});
-  const d = await r.json();
-  document.getElementById('shutdown-msg').textContent = d.status;
-}
-
-refreshStatus();
-setInterval(refreshStatus, 8000);
-</script>
-</body>
-</html>
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -568,25 +800,156 @@ def _find_port() -> tuple[int, bool]:
     raise RuntimeError(f"Could not bind any port in range {DEFAULT_PORT}-{port}")
 
 
-def main():
-    port, is_existing = _find_port()
+# ---------------------------------------------------------------------------
+# The window (§1.1)
+# ---------------------------------------------------------------------------
+#
+# Milestone 1 shipped the UI as a browser tab. Two problems came out of
+# that, both diagnosed live rather than guessed at:
+#
+#   - "Refreshing the browser loses the app." The server was never the
+#     problem — an instance launched 2026-08-29 was still up two days
+#     later, answering /healthz in 31ms and still holding a complete
+#     26-student run. The page threw its own state away on reload. Fixed
+#     on the UI side (ui/app.js boot()).
+#
+#   - Nothing owned the app's lifetime. Every launch opened another tab
+#     and closed none, and closing the last tab left the server running
+#     forever. The Milestone 1 log shows the signature clearly: five
+#     /api/status calls arriving together once every 60 seconds — five
+#     abandoned tabs, each clamped to the background-timer floor.
+#
+# A real window fixes the second structurally: one window, and when it
+# closes the app shuts down properly (SPEC §1.2 cleanup included). If a
+# webview cannot be created, fall back to the browser rather than failing
+# to start at all — a degraded UI beats no UI.
 
-    if is_existing:
-        webbrowser.open(f"http://127.0.0.1:{port}")
-        return
+_window = None
 
-    # The self-test runs lazily on first /api/status call, not here — the
-    # HTTP server (and therefore the browser tab) should come up
-    # immediately; the UI shows "checking..." while the self-test (which
-    # can take ~40s, since it does a full live SolidWorks round-trip) runs.
-    atexit.register(_shutdown_cleanup)
 
-    threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+@app.route("/api/focus", methods=["POST"])
+def api_focus():
+    """
+    Asks an already-running instance to surface its window, so launching
+    the app a second time raises the existing window instead of opening a
+    second one. This is what keeps the single-instance guard (§1.1.4) from
+    reintroducing the multiple-tabs problem in window form.
+    """
+    if _window is None:
+        return jsonify({"focused": False, "reason": "running without a window"})
+    try:
+        _window.show()
+        _window.on_top = True
+        _window.on_top = False
+        return jsonify({"focused": True})
+    except Exception as exc:
+        return jsonify({"focused": False, "reason": str(exc)})
+
+
+def _serve(port: int) -> None:
     # threaded=True: the self-test and grading run each make long-running
     # blocking SolidWorks COM calls; without this the single-threaded dev
     # server would freeze the whole UI (including status polling) for the
     # duration of each one.
-    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False, threaded=True)
+    app.run(host="127.0.0.1", port=port, debug=False,
+            use_reloader=False, threaded=True)
+
+
+def _wait_for_server(port: int, timeout: float = 15.0) -> bool:
+    import urllib.request
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.1)
+    return False
+
+
+def _post_to_instance(port: int, path: str) -> bool:
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=b"{}",
+                                     headers={"Content-Type": "application/json"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def run_window(port: int) -> bool:
+    """
+    Open the app in a real window. Returns True if a window was shown (and
+    has since been closed), False if no webview could be created — in
+    which case the caller falls back to the browser.
+    """
+    global _window
+    try:
+        import webview
+    except Exception as exc:
+        print(f"[window] pywebview unavailable ({exc}); falling back to the browser.")
+        return False
+
+    try:
+        _window = webview.create_window(
+            "SolidGrade",
+            f"http://127.0.0.1:{port}",
+            width=1280, height=860,
+            min_size=(940, 600),
+            # A grading run takes tens of seconds per file and cannot be
+            # resumed (§11.1 checkpointing is not built yet), so an
+            # accidental window close is expensive. Confirm it.
+            confirm_close=True,
+        )
+        # EdgeChromium explicitly: WebView2 is present on Windows 11 and is
+        # the only backend worth running here. Naming it means a missing
+        # runtime fails loudly at start rather than silently falling back
+        # to the ancient MSHTML renderer, which cannot render this UI.
+        webview.start(gui="edgechromium")
+        return True
+    except Exception as exc:
+        print(f"[window] could not create a webview window ({exc}); falling back to the browser.")
+        _window = None
+        return False
+
+
+def main():
+    port, is_existing = _find_port()
+
+    if is_existing:
+        # §1.1.4: another copy already owns the port. Raise its window
+        # rather than starting a second UI onto the same server.
+        if not _post_to_instance(port, "/api/focus"):
+            webbrowser.open(f"http://127.0.0.1:{port}")
+        return
+
+    # The self-test runs lazily on first /api/status call, not here — the
+    # HTTP server (and therefore the window) should come up immediately;
+    # the UI shows "checking..." while the self-test (which can take ~40s,
+    # since it does a full live SolidWorks round-trip) runs.
+    atexit.register(_shutdown_cleanup)
+
+    threading.Thread(target=_serve, args=(port,), daemon=True).start()
+    if not _wait_for_server(port):
+        print(f"[startup] server did not come up on port {port}")
+        return
+
+    if run_window(port):
+        # The window was closed. The window IS the app (this is the whole
+        # point of moving off a browser tab), so run the same §1.2 cleanup
+        # the Shut Down control runs, then exit. os._exit because Flask's
+        # server thread is a daemon with no clean stop hook.
+        _shutdown_cleanup()
+        os._exit(0)
+
+    # No webview: degrade to the Milestone 1 behaviour rather than not
+    # starting. Here the server genuinely does outlive the browser tab, so
+    # Shut Down remains the only way to end it — as it was in Milestone 1.
+    webbrowser.open(f"http://127.0.0.1:{port}")
+    threading.Event().wait()
 
 
 if __name__ == "__main__":

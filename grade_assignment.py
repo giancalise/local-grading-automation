@@ -235,8 +235,19 @@ def grade_assignment(
     solution_volume: float | None = None,
     student_identity_map: dict | None = None,
     progress_callback=None,
+    voxel_resolution: int | None = None,
 ):
     """
+    voxel_resolution: optional override for the module-level VOXEL_RES.
+    Additive and defaulted to None, so every existing caller is unaffected.
+    SPEC_v0.2 §7.4 / D3 puts a HARD FLOOR of 64 on this — it is a criteria
+    field, not a speed lever, and §7.5 marks the form check "valid only at
+    resolution >= 64" (measured noise floor ~0.8% at 64 vs ~3% at 24).
+    Anything below 64 is therefore raised to 64 rather than honoured; the
+    value actually used is what gets stamped into
+    thresholds.voxel_resolution in the result, so the output always records
+    what was really run, not what was asked for.
+
     progress_callback: optional callable(dict) invoked after each student
     with {"current": int, "total": int, "filename": str, "elapsed_s":
     float, "file_seconds": float}. Additive, minimal hook for the desktop
@@ -247,6 +258,12 @@ def grade_assignment(
     When provided, grades use Firebase UID and display name instead of
     values derived from the filename or SolidWorks file metadata.
     """
+    # SPEC_v0.2 §7.4 hard floor. Clamp rather than reject: a caller asking
+    # for less still gets a valid grade, and the value below is the one
+    # stamped into the result, so the output never claims a resolution it
+    # did not use.
+    effective_voxel_res = VOXEL_RES if voxel_resolution is None else max(64, int(voxel_resolution))
+
     # Explicit COM init on the thread that will actually make COM calls
     # (SPEC_v0.2 §14.4) — this call must happen here, not at import time,
     # since import can happen on a different thread than the one that runs
@@ -461,7 +478,7 @@ def grade_assignment(
                     if _is_valid_mesh(student_mesh):
                         stu_norm = _normalize_mesh(student_mesh)
                         iou, best_flip, alignment = compare_meshes_normalized(
-                            stu_norm, sol_norm, VOXEL_RES
+                            stu_norm, sol_norm, effective_voxel_res
                         )
                         record["checks"]["shape_score"]           = iou
                         record["geometry"]["alignment_transform"] = alignment
@@ -642,7 +659,7 @@ def grade_assignment(
             "thresholds": {
                 "volume_tolerance": VOLUME_TOLERANCE,
                 "shape_threshold":  SHAPE_THRESHOLD,
-                "voxel_resolution": VOXEL_RES,
+                "voxel_resolution": effective_voxel_res,
             },
             "students": all_results,
         }

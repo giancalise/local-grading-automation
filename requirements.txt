@@ -19,3 +19,22 @@ pywin32==312
 scipy==1.18.1
 trimesh==5.0.0
 Werkzeug==3.1.8
+
+# --- Milestone 2: the window ---
+# pywebview hosts the UI in a real OS window instead of a browser tab, via
+# the WebView2 (EdgeChromium) runtime, which ships with Edge on Windows 11
+# (confirmed present on this machine: 151.0.4129.107). This is what makes
+# window lifetime == app lifetime, which is how the abandoned-tab /
+# never-exiting-server problem found in Milestone 1 testing is fixed
+# structurally rather than papered over. app.py falls back to the browser
+# if no webview can be created, so a missing runtime degrades rather than
+# blocks. pythonnet/clr_loader are pywebview's Windows backend; bottle,
+# proxy_tools, cffi, pycparser and typing_extensions come with it.
+bottle==0.13.4
+cffi==2.1.1
+clr_loader==0.3.1
+proxy_tools==0.1.0
+pycparser==3.0
+pythonnet==3.1.0
+pywebview==6.2.1
+typing_extensions==4.16.0
