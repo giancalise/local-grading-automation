@@ -119,7 +119,10 @@ const state = {
   launching: false,
   picking: false,
   view: 'home',
-  results: { filter: 'all', query: '', sortKey: 'total', sortDir: 'asc' },
+  /* `expanded` holds the student keys whose §12.6 detail panel is open.
+     It lives in state, not in the DOM, because renderResults() rebuilds
+     the whole table on every search keystroke, sort and poll. */
+  results: { filter: 'all', query: '', sortKey: 'total', sortDir: 'asc', expanded: new Set() },
 };
 
 /* ==========================================================================
@@ -885,6 +888,11 @@ function studentRows() {
   return rows;
 }
 
+/* Set by a control that is about to trigger a rebuild of the table it lives
+   in, so the rebuilt copy of that control gets the focus back. Without it,
+   expanding a row throws keyboard focus to the top of the document. */
+let pendingFocusId = null;
+
 function renderResults() {
   const host = $('results-body');
   const r = state.run;
@@ -894,9 +902,15 @@ function renderResults() {
   const active = document.activeElement;
   const keepSearch = !!(active && active.type === 'search' && host.contains(active));
   const caret = keepSearch ? active.selectionStart : null;
+  const wantFocus = pendingFocusId;
+  pendingFocusId = null;
 
   host.innerHTML = '';
   const restoreFocus = () => {
+    if (wantFocus) {
+      const target = document.getElementById(wantFocus);
+      if (target) { target.focus(); return; }
+    }
     if (!keepSearch) return;
     const next = host.querySelector('input[type="search"]');
     if (next) { next.focus(); if (caret != null) next.setSelectionRange(caret, caret); }
@@ -1060,9 +1074,35 @@ function renderResults() {
     const tr = el('tr');
     if (isOverridden(s)) tr.classList.add('is-overridden');
 
+    const key = studentKey(s);
+    const detailId = safeId(key) + '-detail';
+    const toggleId = safeId(key) + '-toggle';
+    const isOpen = state.results.expanded.has(key);
+
     const nameTd = el('td', 'col-sticky');
-    nameTd.appendChild(el('div', 'cell-name', s.username || s.uid || '(unknown)'));
-    nameTd.appendChild(el('div', 'cell-file', s.filename || ''));
+    const nameWrap = el('div', 'cell-name-wrap');
+    /* The toggle lives INSIDE the frozen name column rather than in a column
+       of its own, so the sticky offset and the colspan below stay put. */
+    const toggle = el('button', 'row-expand');
+    toggle.type = 'button';
+    toggle.id = toggleId;
+    toggle.innerHTML = icon('chevron-down', 16);
+    toggle.setAttribute('aria-expanded', String(isOpen));
+    toggle.setAttribute('aria-controls', detailId);
+    toggle.setAttribute('aria-label',
+      `${isOpen ? 'Hide' : 'Show'} details for ${s.username || s.filename || 'this student'}`);
+    toggle.addEventListener('click', () => {
+      if (state.results.expanded.has(key)) state.results.expanded.delete(key);
+      else state.results.expanded.add(key);
+      pendingFocusId = toggleId;
+      renderResults();
+    });
+    nameWrap.appendChild(toggle);
+    const nameCol = el('div', 'grow');
+    nameCol.appendChild(el('div', 'cell-name', s.username || s.uid || '(unknown)'));
+    nameCol.appendChild(el('div', 'cell-file', s.filename || ''));
+    nameWrap.appendChild(nameCol);
+    nameTd.appendChild(nameWrap);
     tr.appendChild(nameTd);
 
     const c = s.checks || {};
@@ -1154,12 +1194,22 @@ function renderResults() {
     tr.appendChild(actTd);
 
     tbody.appendChild(tr);
+
+    if (isOpen) {
+      const dtr = el('tr', 'detail-row');
+      dtr.id = detailId;
+      const dtd = el('td');
+      dtd.colSpan = RESULT_COLS;
+      dtd.appendChild(renderDetail(s, res));
+      dtr.appendChild(dtd);
+      tbody.appendChild(dtr);
+    }
   });
 
   if (!rows.length) {
     const tr = el('tr');
     const td = el('td');
-    td.colSpan = 9;
+    td.colSpan = RESULT_COLS;
     td.style.padding = '3rem 1.5rem';
     td.style.textAlign = 'center';
     td.className = 'faint';
@@ -1173,6 +1223,439 @@ function renderResults() {
   card.appendChild(scroll);
   host.appendChild(card);
   restoreFocus();
+}
+
+/* --------------------------------------------------------------------------
+   §12.6 / Milestone 3 — per-student detail.
+
+   Nothing below computes a grade or re-derives a verdict. Every value here
+   was already in the result JSON and had nowhere to be displayed; the row
+   showed a ✓ or ✗ per check and threw the rest away, including the
+   underdefined sketch NAMES, which are the most actionable thing the
+   grader produces.
+
+   Two rules this section keeps:
+
+   * §15.1's third state survives the trip. A null is "not evaluated", and
+     is rendered as such — never as 0, never as a fail, never as a blank
+     that reads like a zero.
+   * The panel explains, it does not re-decide. Where a number alone is
+     misleading — most sharply the volume-coupled full-credit boost, which
+     silently withholds full shape credit when volume did not pass — the
+     panel says so in words next to the numbers that produced it.
+   -------------------------------------------------------------------------- */
+
+const RESULT_COLS = 9;   /* keep in step with the header row below */
+
+const studentKey = (s) => String((s && (s.username || s.uid || s.filename)) || '');
+/* A DOM-id-safe derivative of the key. Student names are arbitrary text. */
+const safeId = (k) => 'sk-' + String(k).replace(/[^A-Za-z0-9_-]/g, '_');
+
+function dl(pairs) {
+  const d = el('dl', 'dl');
+  pairs.forEach(([label, value, mod]) => {
+    d.appendChild(el('dt', null, label));
+    d.appendChild(el('dd', mod || null, value));
+  });
+  return d;
+}
+
+function detailCard(title, mods) {
+  const c = el('div', mods ? `detail-card ${mods}` : 'detail-card');
+  const head = el('div', 'detail-card__head');
+  head.appendChild(el('div', 'detail-card__title', title));
+  c.appendChild(head);
+  return c;
+}
+
+function note(text, mod) {
+  return el('div', mod ? `detail-note ${mod}` : 'detail-note', text);
+}
+
+/* ---- Form -------------------------------------------------------------- */
+/* compute_grade() gives full shape credit only when shape_score >= threshold
+   AND volume is PASS. Until now that coupling was invisible: a student could
+   show IoU 0.99 against a 0.95 threshold and still lose shape points, with
+   nothing on screen saying why. */
+function formCard(s, res) {
+  const c = s.checks || {};
+  const thr = (res.thresholds && res.thresholds.shape_threshold);
+  const weight = (res.rubric && res.rubric.shape);
+  const card = detailCard('Form');
+
+  if (c.shape_score == null) {
+    card.appendChild(dl([
+      ['Shape score', 'Not evaluated', 'is-faint'],
+      ['Threshold', thr == null ? '—' : thr.toFixed(3)],
+    ]));
+    card.appendChild(note(
+      'The form comparison did not produce a score, so no shape points were ' +
+      'awarded and the student is flagged for review. This is not a score of zero.'));
+    return card;
+  }
+
+  const met = thr != null && c.shape_score >= thr;
+  const volPass = c.volume_status === 'pass';
+  const boosted = met && volPass;
+  const credit = boosted ? 1 : c.shape_score;
+
+  card.appendChild(dl([
+    ['Shape score', c.shape_score.toFixed(3), met ? 'is-ok' : 'is-bad'],
+    ['Threshold', thr == null ? '—' : thr.toFixed(3)],
+    ['Credit used', credit.toFixed(3)],
+    ['Voxel resolution',
+      (res.thresholds && res.thresholds.voxel_resolution) != null
+        ? String(res.thresholds.voxel_resolution) : '—'],
+  ]));
+
+  if (boosted) {
+    card.appendChild(note(
+      `Full shape credit applied. The score met the ${thr.toFixed(2)} threshold and the ` +
+      `volume check passed, so shape is credited at 1.000 rather than at the raw ` +
+      `${c.shape_score.toFixed(3)}.`, 'detail-note--ok'));
+  } else if (met && !volPass) {
+    card.appendChild(note(
+      `Full-credit boost NOT applied. The score met the ${thr.toFixed(2)} threshold, but ` +
+      `full shape credit also requires the volume check to pass and it did not ` +
+      `(volume is ${c.volume_status || 'not evaluated'}). Shape is therefore credited at the ` +
+      `raw ${c.shape_score.toFixed(3)}, not 1.000.`, 'detail-note--warn'));
+  } else {
+    card.appendChild(note(
+      `Below the ${thr == null ? '—' : thr.toFixed(2)} threshold, so shape is credited at the ` +
+      `raw score of ${c.shape_score.toFixed(3)}.`));
+  }
+
+  if (weight != null) {
+    card.appendChild(note(
+      `${credit.toFixed(3)} × ${(weight * 100).toFixed(0)} = ` +
+      `${fmtNum(s.grade && s.grade.shape_points, 1)} points.`));
+  }
+  return card;
+}
+
+/* ---- Volume ------------------------------------------------------------ */
+function volumeCard(s, res) {
+  const c = s.checks || {};
+  const sol = (res.solution && res.solution.volume_mm3);
+  const tol = (res.thresholds && res.thresholds.volume_tolerance);
+  /* Volume and mass come from the same mass-property read, so they belong
+     on the same card — SPEC's own check list treats them as one lookup. */
+  const card = detailCard('Volume & mass');
+  const v = c.volume_mm3;
+
+  const rows = [
+    ['Student', v == null ? 'Not read' : `${v.toFixed(1)} mm³`, v == null ? 'is-faint' : null],
+    ['Solution', sol == null ? '—' : `${sol.toFixed(1)} mm³`],
+  ];
+  if (v != null && sol != null && sol !== 0) {
+    const delta = v - sol;
+    const pct = (delta / sol) * 100;
+    const within = tol != null && Math.abs(delta) / Math.abs(sol) <= tol;
+    const sign = delta >= 0 ? '+' : '−';
+    rows.push(['Difference', `${sign}${Math.abs(delta).toFixed(1)} mm³`, within ? 'is-ok' : 'is-bad']);
+    rows.push(['Difference %', `${sign}${Math.abs(pct).toFixed(3)} %`, within ? 'is-ok' : 'is-bad']);
+  }
+  if (tol != null) rows.push(['Tolerance', `± ${(tol * 100).toFixed(2)} %`]);
+  rows.push(['Mass', c.mass_kg == null ? 'Not read' : `${c.mass_kg.toFixed(4)} kg`,
+             c.mass_kg == null ? 'is-faint' : null]);
+  card.appendChild(dl(rows));
+
+  if (c.volume_status === 'not_evaluated' || c.volume_status == null) {
+    card.appendChild(note(
+      'Not evaluated — the volume could not be read, so no volume points were ' +
+      'awarded and review is forced. This is not a measured mismatch.'));
+  }
+  return card;
+}
+
+/* ---- Material ---------------------------------------------------------- */
+function materialCard(s, res) {
+  const c = s.checks || {};
+  const card = detailCard('Material');
+  card.appendChild(dl([
+    ['Student', c.material || 'Not assigned', c.material ? null : 'is-faint'],
+    ['Solution', (res.solution && res.solution.material) || '—'],
+  ]));
+  if (c.material_status === 'not_evaluated' || c.material_status == null) {
+    card.appendChild(note(
+      'Not evaluated — either the student file carries no material or the solution ' +
+      'does. Points withheld and review forced; not a wrong-material failure.'));
+  }
+  return card;
+}
+
+/* ---- Sketches ---------------------------------------------------------- */
+function sketchCard(s) {
+  const c = s.checks || {};
+  const names = c.underdefined_sketches || [];
+  const card = detailCard('Sketches');
+
+  if (c.sketches_status === 'not_evaluated' || c.sketches_status == null) {
+    card.appendChild(note(
+      'Not evaluated — a sketch status could not be read, or the file exposed no ' +
+      'sketch features at all. Points withheld and review forced.'));
+    return card;
+  }
+  if (!names.length) {
+    card.appendChild(note('Every sketch is fully defined.', 'detail-note--ok'));
+    return card;
+  }
+
+  const list = el('div', 'sketch-list');
+  names.forEach((n) => list.appendChild(el('span', 'sketch-chip', n)));
+  card.appendChild(list);
+  card.appendChild(note(
+    `${names.length} underdefined sketch${names.length === 1 ? '' : 'es'}. The sketch check is ` +
+    'all-or-nothing today, so one underdefined sketch withholds the whole sketch weight.'));
+  return card;
+}
+
+/* ---- Points ------------------------------------------------------------ */
+/* §12.4: computed and override are a pair, and the computed value is never
+   replaced. The breakdown below is always the COMPUTED one — an override
+   replaces the total the instructor reports, not the arithmetic that
+   produced it, and hiding the arithmetic behind an override would lose
+   exactly the thing §12.4 says must stay retrievable. */
+function pointsCard(s) {
+  const g = s.grade || {};
+  const card = detailCard('Points');
+  card.appendChild(dl([
+    ['Shape', fmtNum(g.shape_points, 1)],
+    ['Volume', fmtNum(g.volume_points, 1)],
+    ['Material', fmtNum(g.material_points, 1)],
+    ['Sketches', fmtNum(g.sketch_points, 1)],
+    ['Computed total', fmtNum(g.total, 1)],
+  ]));
+
+  const foot = el('div', 'points-total');
+  foot.appendChild(el('div', 'points-total__label',
+    g.override != null ? 'Effective (overridden)' : 'Effective total'));
+  const val = el('div',
+    g.override != null ? 'points-total__value is-override' : 'points-total__value',
+    fmtNum(effectiveTotal(s), 1));
+  foot.appendChild(val);
+  card.appendChild(foot);
+
+  if (g.override != null) {
+    card.appendChild(note(
+      `Overridden from the computed ${fmtNum(g.total, 1)}` +
+      (g.override_note ? ` — “${g.override_note}”` : '') +
+      '. The computed value above is kept and can be restored with Revert.'));
+  }
+  return card;
+}
+
+/* SolidWorks writes last-saved as a full ISO timestamp with an offset, which
+   wraps over three lines in a narrow cell and is harder to read than it is
+   precise. Shortened to date + minutes; the raw value stays in the title
+   attribute and in the CSV export. */
+function fmtWhen(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ---- Provenance -------------------------------------------------------- */
+/* §7.7 reframes these as a PROMPT to look, not as proof. The wording keeps
+   that: SolidWorks metadata is editable, so it is evidence, not a verdict. */
+function provenanceCard(s) {
+  const card = detailCard('Provenance');
+  const rows = [
+    ['SW author', s.sw_author || 'None recorded', s.sw_author ? null : 'is-faint'],
+    ['Last saved', fmtWhen(s.last_saved_date) || '—', s.last_saved_date ? null : 'is-faint'],
+  ];
+  const f = s.flags || {};
+  if (f.plagiarism) {
+    rows.push(['Shared author with', f.plagiarism_with || '—', 'is-bad']);
+  }
+  const list = dl(rows);
+  if (s.last_saved_date) {
+    /* The exact recorded value stays one hover away. */
+    const dd = list.querySelectorAll('dd')[1];
+    if (dd) dd.title = s.last_saved_date;
+  }
+  card.appendChild(list);
+  if (f.plagiarism) {
+    card.appendChild(note(
+      'Another submission carries the same SolidWorks author. That is a prompt to ' +
+      'look, not a finding — the field is editable and shared lab logins produce ' +
+      'the same signal.', 'detail-note--warn'));
+  }
+  return card;
+}
+
+/* ---- Source file + §12.6 row actions ----------------------------------- */
+function sourceCard(s, res) {
+  const card = detailCard('Submission', 'detail-card--wide');
+  const path = s.source_path;
+
+  const p = el('p', 'detail-path', path || s.filename || '(no file recorded)');
+  card.appendChild(p);
+
+  const actions = el('div', 'detail-actions');
+
+  if (!path) {
+    /* A result graded before Milestone 3 stored only the basename, so there
+       is nothing to open. Rather than a dead button, offer the one-step fix. */
+    card.appendChild(note(
+      'This result was graded before absolute source paths were recorded, so the ' +
+      'file cannot be opened from here yet. Point the app at the submissions ' +
+      'folder and every row that matches a file in it will link up.'));
+    const locate = el('button', 'btn-secondary btn-sm');
+    locate.type = 'button';
+    locate.innerHTML = `${icon('search', 14)} Locate submissions folder`;
+    locate.addEventListener('click', locateSources);
+    actions.appendChild(locate);
+    card.appendChild(actions);
+    return card;
+  }
+
+  const name = s.username || s.filename || 'this student';
+
+  const openBtn = el('button', 'btn-tint btn-tint--cyan');
+  openBtn.type = 'button';
+  openBtn.innerHTML = `${icon('external-link', 12)} Open in SOLIDWORKS`;
+  openBtn.setAttribute('aria-label', `Open ${name}'s submission in SOLIDWORKS, read-only`);
+  openBtn.addEventListener('click', () => openInSolidWorks(openBtn, path, `${name}'s submission`));
+  actions.appendChild(openBtn);
+
+  const revealBtn = el('button', 'btn-tint btn-tint--neutral');
+  revealBtn.type = 'button';
+  revealBtn.innerHTML = `${icon('folder', 12)} Reveal in File Explorer`;
+  revealBtn.setAttribute('aria-label', `Show ${name}'s submission in File Explorer`);
+  revealBtn.addEventListener('click', () => revealFile(path));
+  actions.appendChild(revealBtn);
+
+  /* §12.6: "Open student submission and Open solution, from any row." */
+  const solPath = res.solution && res.solution.file;
+  if (solPath) {
+    const solBtn = el('button', 'btn-tint btn-tint--neutral');
+    solBtn.type = 'button';
+    solBtn.innerHTML = `${icon('external-link', 12)} Open solution`;
+    solBtn.setAttribute('aria-label', 'Open the solution part in SOLIDWORKS, read-only');
+    solBtn.addEventListener('click', () => openInSolidWorks(solBtn, solPath, 'the solution'));
+    actions.appendChild(solBtn);
+  }
+
+  card.appendChild(actions);
+  /* §12.6 / §13: referenced, never copied. Saying so on screen is the point —
+     an instructor who expected a "save a copy" button should see why there
+     isn't one rather than assume it was forgotten. */
+  card.appendChild(note(
+    'Opens are read-only and the file is never copied — the app only ever holds ' +
+    'this path, not the submission.'));
+  return card;
+}
+
+/* ---- The panel --------------------------------------------------------- */
+function renderDetail(s, res) {
+  const panel = el('div', 'detail-panel');
+  const grid = el('div', 'detail-grid');
+
+  if (s.error) {
+    const errCard = detailCard('Error', 'detail-card--wide detail-card--error');
+    const pre = el('p', 'detail-path', s.error);
+    errCard.appendChild(pre);
+    grid.appendChild(errCard);
+  }
+
+  grid.appendChild(formCard(s, res));
+  grid.appendChild(volumeCard(s, res));
+  grid.appendChild(materialCard(s, res));
+  grid.appendChild(sketchCard(s));
+  grid.appendChild(pointsCard(s));
+  grid.appendChild(provenanceCard(s));
+  grid.appendChild(sourceCard(s, res));
+
+  panel.appendChild(grid);
+  return panel;
+}
+
+/* ---- Row actions ------------------------------------------------------- */
+
+/* The endpoints answer with a `reason` so the page can tell "the file moved"
+   (normal — §13 means the app never held a copy) apart from "SOLIDWORKS
+   refused" (worth a dialog) apart from "a run owns SOLIDWORKS" (wait). */
+function rowActionError(e, title) {
+  const reason = e.body && e.body.reason;
+  if (reason === 'run_in_progress') { toast(e.message); return; }
+  modal.open({
+    title: reason === 'file_moved' ? 'File not found' : title,
+    description: reason === 'file_moved'
+      ? 'The submission is not where this run recorded it.'
+      : '',
+    body: (() => {
+      const b = el('div', 'stack-2');
+      const p = el('p', 'small');
+      p.textContent = e.message;
+      b.appendChild(p);
+      if (reason === 'file_moved') {
+        b.appendChild(el('p', 'tiny faint',
+          'Student files are referenced, never copied, so moving or renaming one ' +
+          'breaks the link. Grades are unaffected. Use "Locate submissions folder" ' +
+          'to re-point this result at where the files live now.'));
+      }
+      return b;
+    })(),
+    actions: [{ label: 'Close', className: 'btn-primary', onClick: () => modal.close() }],
+  });
+}
+
+async function openInSolidWorks(btn, path, label) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `${icon('loader', 12)} Opening…`;
+  try {
+    const d = await post('/api/open_in_solidworks', { path });
+    /* Two independent answers come back and both are reported rather than
+       assumed. §15.3 is the invariant this action could break, so:
+       `read_only` is what SOLIDWORKS itself says about the document
+       (null when the edition will not answer), and `unchanged` is the
+       server's own sha256 of the file either side of the open. */
+    if (d && d.unchanged === false) {
+      toast(`Opened ${label} — WARNING: the file changed on disk. Report this.`);
+    } else if (d && d.read_only === true) {
+      toast(`Opened ${label} in SOLIDWORKS. SOLIDWORKS confirms it is read-only.`);
+    } else {
+      toast(`Opened ${label} read-only. SOLIDWORKS did not confirm the state; the file is unchanged on disk.`);
+    }
+  } catch (e) {
+    rowActionError(e, 'Could not open in SOLIDWORKS');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function revealFile(path) {
+  try {
+    await post('/api/reveal_file', { path });
+  } catch (e) {
+    rowActionError(e, 'Could not reveal the file');
+  }
+}
+
+async function locateSources() {
+  try {
+    const picked = await post('/api/pick_folder');
+    if (!picked || !picked.path) return;
+    const d = await post('/api/locate_sources', { students_folder: picked.path });
+    if (state.run) state.run.result = d.result;
+    renderResults();
+    if (d.matched === 0) {
+      toast('No file in that folder matched a student in these results.');
+    } else if (d.unmatched.length) {
+      toast(`Linked ${d.matched} of ${d.total} submissions. ${d.unmatched.length} had no matching file.`);
+    } else {
+      toast(`Linked all ${d.matched} submissions.`);
+    }
+    if (d.save_error) toast(`Linked in memory but not saved to disk: ${d.save_error}`);
+  } catch (e) {
+    toast(`Could not locate the submissions: ${e.message}`);
+  }
 }
 
 function openOverrideDialog(s) {

@@ -6,6 +6,14 @@ __pycache__/
 # Logs (contain student names, grades, file paths)
 *.log
 
+# Grading output. Frozen builds write to %LOCALAPPDATA%\SolidGrade\output,
+# but a run from source writes here (app.py results_root()), and those
+# files carry student names, grades and absolute submission paths --
+# the same reason *.log is excluded above. Milestone 3 added
+# students_folder / source_path to the result JSON, so it now also
+# carries the location of every submission on disk.
+output/
+
 # Build artifacts
 dist/
 build/

@@ -26,6 +26,8 @@ JSON schema (results.json)
   "assignmentName":    str,
   "gradedAt":          str,   # ISO-8601
   "published":         false, # instructor controls visibility
+  "students_folder":   str,   # absolute folder the submissions were read from
+                              # (SPEC_v0.2 §12.6 — referenced, never copied)
   "solution": {
     "volume_mm3":  float,
     "material":    str,
@@ -37,6 +39,12 @@ JSON schema (results.json)
     {
       "username":    str,
       "filename":    str,
+      "source_path": str,       # absolute path to the ORIGINAL submission.
+                                # SPEC_v0.2 §12.6 requires the absolute
+                                # source path be stored so the results view
+                                # can open or reveal the file on demand;
+                                # §13 forbids copying student files, so this
+                                # reference is the only handle that exists.
       "sw_author":   str | null,
       "grade": {
         "total":           float,
@@ -376,6 +384,12 @@ def grade_assignment(
                 "uid":         uid,           # Firebase Auth UID
                 "username":    display_name,  # Firebase Auth display name (shown in UI)
                 "filename":    filename,
+                # Absolute path to the student's ORIGINAL file (SPEC_v0.2
+                # §12.6). Grading itself never touches this path — it reads
+                # a scratch copy (§15.3) — but the results view needs a real
+                # handle to open or reveal the submission, and §13 forbids
+                # keeping a copy, so the path is the whole handle.
+                "source_path": str(student_path.resolve()),
                 "sw_author":   None,          # SolidWorks login — kept for plagiarism only
                 "last_saved_date": None,
                 "grade":       None,
@@ -644,6 +658,9 @@ def grade_assignment(
             "assignmentName": assignment_name,
             "gradedAt":       time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "published":      False,
+            # Recorded so the results view can offer §12.6's row actions and,
+            # for a folder that has since moved, re-point at it in one step.
+            "students_folder": os.path.abspath(students_folder),
             "solution": {
                 "file":        solution_path,
                 "volume_mm3":  solution_volume,

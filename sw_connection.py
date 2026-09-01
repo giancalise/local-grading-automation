@@ -45,9 +45,19 @@ SW_DOC_PART = 1          # swDocPART
 SW_DOC_ASSEMBLY = 2      # swDocASSEMBLY
 SW_DOC_DRAWING = 3       # swDocDRAWING
 
-# OpenDoc7 option flags
-SW_OPEN_SILENT = 2       # swOpenDocOptions_Silent   — no UI prompts
-SW_OPEN_READ_ONLY = 32   # swOpenDocOptions_ReadOnly — no save-back risk
+# swOpenDocOptions_e bit flags.
+#
+# CORRECTED in Milestone 3. These were previously SILENT = 2 and
+# READ_ONLY = 32, and both were wrong: 2 IS ReadOnly, and 32 is
+# AutoMissingConfig. Measured live rather than looked up — opening a part
+# with options=32 leaves IModelDoc2.IsOpenedReadOnly False, opening it with
+# options=2 leaves it True. The old pair therefore never set Silent at all,
+# and only contained the real ReadOnly bit by coincidence.
+#
+# This matters for SPEC_v0.2 §15.3 point 1, which requires student files be
+# opened read-only. See MILESTONE_3_REPORT.md §3.1 for the measurement.
+SW_OPEN_SILENT = 1       # swOpenDocOptions_Silent   — no UI prompts
+SW_OPEN_READ_ONLY = 2    # swOpenDocOptions_ReadOnly — no save-back risk
 
 # ISldWorks.ApplicationType values
 SW_APP_TYPE_DESKTOP = 0
@@ -239,9 +249,29 @@ class SolidWorksConnection:
         # scratch copy rather than the original (§15.3 point 2).
         try:
             options = SW_OPEN_SILENT | SW_OPEN_READ_ONLY
-            doc = app.OpenDoc6(str(path), SW_DOC_PART, options, "", 0, 0)
+            # Errors and Warnings are [out] parameters and MUST be passed as
+            # real BYREF variants.
+            #
+            # CORRECTED in Milestone 3. This call used to pass plain `0, 0`,
+            # which fails with "Type mismatch" (argErr 5) under late binding:
+            # pywin32 has no type info for a dynamic dispatch, so it sends
+            # them as [in] longs and SolidWorks rejects the call. Measured
+            # live: strategy 1 raised every time, strategy 2 raised
+            # "Parameter not optional", and every open in the product fell
+            # through to the bare read-write OpenDoc below with
+            # IsOpenedReadOnly == False. §15.3 point 1 was written into this
+            # function and had never once executed.
+            #
+            # Student files were nevertheless safe throughout, because
+            # §15.3 point 2 — grade_assignment.py's filesystem-read-only
+            # scratch copy — is what actually protects them. This restores
+            # the defence in depth §15.3 asks for.
+            errors = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            warnings = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            doc = app.OpenDoc6(str(path), SW_DOC_PART, options, "", errors, warnings)
             if doc is not None:
-                logger.debug("OpenDoc6 (Silent|ReadOnly) succeeded for '%s'", path)
+                logger.debug("OpenDoc6 (Silent|ReadOnly) succeeded for '%s' "
+                             "(errors=%s, warnings=%s)", path, errors.value, warnings.value)
         except Exception as e1:
             logger.debug("OpenDoc6 failed (%s), trying OpenDoc2.", e1)
 
@@ -282,7 +312,25 @@ class SolidWorksConnection:
                 "Check that SolidWorks can open this file manually."
             )
 
-        logger.debug("Opened '%s' (err=%d)", path, err)
+        # Say out loud when a fallback produced a writable document. The
+        # fallbacks (OpenDoc2, bare OpenDoc) cannot express read-only at all,
+        # so reaching one is a §15.3 point-1 miss. It is survivable for
+        # grading, which only ever hands SolidWorks a read-only scratch copy
+        # (§15.3 point 2), but it must not be silent again — that silence is
+        # exactly why this went unnoticed until Milestone 3.
+        try:
+            read_only = doc.IsOpenedReadOnly
+            read_only = bool(read_only() if callable(read_only) else read_only)
+        except Exception:
+            read_only = None
+        if read_only is False:
+            logger.warning(
+                "SPEC §15.3: '%s' is open READ-WRITE — the read-only open "
+                "strategy did not take. Safe only because callers hand over a "
+                "read-only scratch copy, never the original.", path
+            )
+
+        logger.debug("Opened '%s' (err=%d, read_only=%s)", path, err, read_only)
         return doc, err
 
     def close_doc(self, filepath: str | Path, save: bool = False) -> None:
