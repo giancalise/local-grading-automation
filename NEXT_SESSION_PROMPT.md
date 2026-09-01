@@ -223,9 +223,11 @@ run — they are already in the progress display — and settle it there.
   recreates `dist/SolidGradeDesktop2/` and cannot while the exe is alive.
 - **Student data is still in git history.** `output/` is now ignored and
   `Quiz3_grades.json`, `Quiz3_grades.csv` and `MT26_grades.xlsx` were untracked
-  with `git rm --cached` (Milestone 3), so nothing new joins them and they are
-  still on disk — but **the earlier commits still contain them**. Purging that
-  needs a history rewrite (`git filter-repo`) and a force-push. Open decision.
+  with `git rm --cached` (Milestone 3) and restored to disk after the merge
+  deleted them (see `MILESTONE_3_REPORT.md` §3.2 — untracking on a branch means
+  the merge removes the working copy). Nothing new joins them, but **the earlier
+  commits still contain them**. Purging that needs a history rewrite
+  (`git filter-repo`) and a force-push. Open decision.
 - **FIXED in Milestone 3:** a `print()` of `⚠` destroyed a *completed* grading
   run on the frozen build — all students graded, PHASE 2 raised
   `UnicodeEncodeError`, PHASE 3 never wrote the JSON. `app.py` now sets

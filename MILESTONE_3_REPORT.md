@@ -356,10 +356,25 @@ Three files were **already committed** there before this session
 (`Quiz3_grades.json`, `Quiz3_grades.csv`, `MT26_grades.xlsx`); adding an ignore
 rule does not untrack an already-tracked file. On the instructor's instruction
 they were removed from the index with `git rm --cached`, so they are no longer
-tracked and the `output/` rule now covers them. **The files are still on disk**
-— nothing was deleted — **and they are still in git history.** Purging history
-would need a rewrite (`git filter-repo` or equivalent) and a force-push, which is
-a separate decision and was not done.
+tracked and the `output/` rule now covers them. **They are still in git
+history** — purging that would need a rewrite (`git filter-repo` or equivalent)
+and a force-push, which is a separate decision and was not done.
+
+**A trap that fired, and is worth knowing.** "`git rm --cached` keeps the file on
+disk" is true only until the branch is merged. Merging into `main` — where the
+files were still tracked — replayed the deletion against a working tree that
+*did* have them, and git removed all three from disk. Nothing was lost (they are
+in every commit up to `5290e20`) and they were restored with:
+
+```bash
+git checkout 5290e20 -- output/
+```
+
+followed by `git rm --cached -r output/` again to leave them untracked. Verified
+byte-identical afterwards by comparing `git hash-object` against
+`git rev-parse 5290e20:<path>` for each. The general lesson: untracking a file on
+a branch means the *merge* deletes the working copy, so back up anything that
+exists only on disk before merging such a change.
 
 ### 3.3 A `print()` of `⚠` destroys a completed grading run — found, and FIXED
 
