@@ -1,37 +1,36 @@
 # Next Session — Milestone 4 Kickoff
 
-**Updated:** 2026-08-31, at the end of the Milestone 3 session (results depth).
+**Updated:** 2026-09-01, at the end of the Milestone 3 session (results depth).
 That session produced `MILESTONE_3_REPORT.md`, the per-student detail panel, the
-§12.6 row actions, and the `source_path` / `students_folder` prerequisite.
-It did **not** rebuild the frozen app — see item 1 and the standing items.
+§12.6 row actions, the `source_path` / `students_folder` prerequisite, the two
+committed verification suites under `tests/`, and the §15.3 open-flag fix.
 
-Item 1 below is done; items 2–4 are unchanged and still only *proposed*. A new
-**item 0** was found during Milestone 3 and needs a decision.
+**Item 1 is done. Item 0 was found and fixed. The instructor has confirmed the
+ordering: item 2 is next.**
 
-**Status going in:** the instructor has run a full grading job from the Desktop
-shortcut, through the app shell, start to finish, successfully. The Desktop
-shortcut still runs the Milestone 2 build.
+**Status going in:** the frozen app was rebuilt and now carries everything from
+this session — the Desktop shortcut runs current code. A full grading run was
+completed on the rebuilt `.exe`. `output/` is git-ignored and the three
+previously-committed grading files are untracked.
 
 ---
 
-## The priority list, as agreed 2026-08-31
+## The priority list — ordering confirmed 2026-09-01
 
-Ordered. Item 1 and the open/reveal decision inside it were chosen by the
-instructor; the ordering of 2–4 is **proposed, not yet agreed** — confirm before
-starting any of them. Milestone 3 added an unnumbered **item 0** further down,
-which is a correctness decision rather than a feature.
+Ordered, and **the ordering of 2–4 was confirmed by the instructor on
+2026-09-01**: item 2 next, then 3, then 4. Item 1 is built (Milestone 3). The
+item 0 that Milestone 3 turned up was authorised and fixed in the same session —
+it is recorded below as closed, not as work.
 
-### 1. Results depth — **BUILT, Milestone 3 (2026-08-31). See `MILESTONE_3_REPORT.md`.**
+### 1. Results depth — **BUILT, Milestone 3. See `MILESTONE_3_REPORT.md`.**
 
 > Delivered in full: the `source_path` / `students_folder` prerequisite, the
 > seven-card per-student detail panel (including the volume-coupled boost
 > explanation and the underdefined sketch names), both chosen row actions, no
 > "save a copy", and a `locate_sources` action so results graded before the
 > change are not permanently inert. 36 API/§15.3 checks and 16 Milestone 2
-> regression checks pass. **The frozen build was NOT rebuilt** — a
-> `SolidGradeDesktop2.exe` holding a completed 26-student run was running, so
-> the Desktop shortcut still launches Milestone 2 code. Rebuild with
-> `pyinstaller --noconfirm SolidGradeDesktop2.spec` after closing the app.
+> regression checks pass, and the frozen build was rebuilt and re-run, so the
+> Desktop shortcut carries all of it.
 >
 > The original specification is kept below for reference.
 
@@ -71,7 +70,15 @@ graded before this change (including the recovered `HW3-06-0194`) have neither,
 so either offer a "locate the submissions folder" action for old results or
 accept that row actions are disabled on them.
 
-### 2. Live results table + §11.1 checkpointing — *proposed second*
+### 2. Live results table + §11.1 checkpointing — **NEXT. Confirmed 2026-09-01.**
+
+> Start here. Milestone 3 produced a second, concrete argument for it: a
+> `print()` of a ⚠ glyph destroyed a **completed** two-student run on the frozen
+> build — all grading succeeded, PHASE 2 raised, PHASE 3 never wrote the JSON,
+> every grade lost (`MILESTONE_3_REPORT.md` §3.3). That specific bug is fixed,
+> but the shape of the failure is exactly what checkpointing exists to survive:
+> anything that raises after the loop currently costs the whole run.
+
 
 These are **one change, not two**, and that is the main reason to do them
 together. `progress_callback` already fires immediately after
@@ -95,7 +102,7 @@ PHASE 2 *after* every student is graded. Live rows can show every check and the
 grade, but the plagiarism column must render as explicitly pending until the run
 completes — not as "clean".
 
-### 3. Configurable criteria — *proposed third*
+### 3. Configurable criteria — **third**, confirmed 2026-09-01
 
 Required by SPEC §10 step 4 ("effective criteria with live toggles and weights…
 applies to this run only; the effective set is embedded in the result record")
@@ -127,7 +134,7 @@ Three things that make this bigger than it looks:
 Also from §7.5, while in here: the sketch check's "underdefined allowed"
 threshold should become an integer (default 0), not a boolean.
 
-### 4. Multi-part problems — *proposed fourth*
+### 4. Multi-part problems — **fourth**, confirmed 2026-09-01
 
 Instructor's ask: a plus button on the run setup screen that adds another
 solution file and another submissions folder, repeatable.
@@ -150,33 +157,40 @@ cheaper. **Do not pick by default — this one touches the web app.**
 
 ---
 
-## New, from Milestone 3 — decide before item 2
+## Closed in Milestone 3 — recorded so it is not rediscovered
 
-### 0. `sw_connection.py`'s open flags are wrong; §15.3 point 1 has never run
+### 0. §15.3 point 1 had never run. Found, fixed, verified. ✅
 
-Found and measured live in Milestone 3 (`MILESTONE_3_REPORT.md` §3.1). Not a
-regression — it predates every milestone.
-
-`SW_OPEN_SILENT = 2` and `SW_OPEN_READ_ONLY = 32` are both mislabelled: in
+`sw_connection.py` had `SW_OPEN_SILENT = 2` and `SW_OPEN_READ_ONLY = 32`; in
 `swOpenDocOptions_e`, `Silent` is 1 and `ReadOnly` is 2 (32 is
-`AutoMissingConfig`). Worse, `open_part_silent()`'s strategy 1 passes the two
-`[out]` parameters of `OpenDoc6` as plain `0, 0`, which fails with **"Type
-mismatch"** under late binding — so every grading open falls through
-`OpenDoc2` to the bare read-write `OpenDoc`, and `IsOpenedReadOnly` is
-**False**. SPEC §15.3 point 1 is written into the code and has never executed.
+`AutoMissingConfig`). Separately, `open_part_silent()` passed `OpenDoc6`'s two
+`[out]` parameters as plain `0, 0`, which fails with "Type mismatch" under late
+binding — so every grading open fell through to the bare read-write `OpenDoc`
+with `IsOpenedReadOnly` **False**. §15.3 point 1 was written into the code and
+had never once executed. Student files were safe throughout because §15.3
+point 2 (the filesystem-read-only scratch copy) is what actually protects them.
 
-**Student files are still safe** — §15.3 point 2 (grade a filesystem-read-only
-scratch copy, never the original) is what has been holding, which is why every
-hash and mtime check has passed. The defence in depth is missing; the
-load-bearing defence is intact.
+**Fixed and verified in Milestone 3** on the instructor's authorisation:
+constants corrected, BYREF `VARIANT`s for the out-params, and a `SPEC §15.3`
+warning logged if any open ever produces a writable document. The read-write
+fallbacks were kept deliberately — grading only ever hands over a scratch copy,
+and a hard failure on a difficult file would be worse — but reaching one is no
+longer silent.
 
-The fix is known and already proven working in `app.py`'s new endpoint:
-`SW_OPEN_SILENT = 1`, `SW_OPEN_READ_ONLY = 2`, and BYREF `VARIANT`s for
-Errors/Warnings. It was **not applied** because it changes the live-verified
-grading path (`ReadOnly|AutoMissingConfig` → `Silent|ReadOnly`, and a genuinely
-read-only open must be re-proven not to break the `SaveAs`-based STL export) and
-needs a full grading run to verify. **This is a judgement call for the
-instructor: fix it first, or leave it and rely on the scratch copy.**
+Proven before shipping: `IsOpenedReadOnly` True, **the `SaveAs`-based STL export
+still works on a read-only document** (274,784 bytes), grades and STLs unchanged
+by the fix, zero §15.3 warnings across a full run, and both suites green
+(36 + 16).
+
+**One measurement to take next session, and one claim NOT to repeat.** Popup
+dismissals fell to **zero** after the fix — solid, and exactly what setting
+`Silent` should do. Per-file timing is *not* settled: from source it went
+48.9/51.1 s → 23.2/23.2 s, but the frozen build right afterwards measured
+**110.3 s and 75.2 s** — slower than anything else this session and slower than
+Milestone 2's 55.5 s frozen figure. One run per condition, with SOLIDWORKS hours
+into heavy use (R-7 degradation, `MILESTONE_2_REPORT.md` §6.1). **Do not plan
+around a speedup.** Just read the per-file numbers off the next real 26-student
+run — they are already in the progress display — and settle it there.
 
 ---
 
@@ -198,16 +212,26 @@ instructor: fix it first, or leave it and rely on the scratch copy.**
 - **Packaging traps** — three stale `.spec` files lack the Milestone 2
   `datas`/`hiddenimports`, and `.gitignore` excludes `*.spec` entirely, so the
   packaging fix is untracked and a fresh clone cannot build a working app.
-- **Rebuild the frozen app.** Milestone 3's work is in the source tree only; the
-  Desktop shortcut still runs the Milestone 2 build. See above.
-- **Three grading outputs are committed to git** (`output/Quiz3_grades.json`,
-  `output/Quiz3_grades.csv`, `output/MT26_grades.xlsx`) and carry student names
-  and grades. `output/` is now git-ignored so nothing new joins them, but
-  removing those three from the working tree or from history is the
-  instructor's call.
-- **`print("⚠ …")` kills a whole grading run when stdout is not UTF-8** — only
-  when running from source without `PYTHONIOENCODING=utf-8`; the frozen app
-  opens its log as UTF-8 and is unaffected. `MILESTONE_3_REPORT.md` §3.3.
+- **`pyinstaller` is not on PATH** — it lives only in `.venv312\Scripts\`, so a
+  bare `pyinstaller` fails with "command not found". Rebuild with:
+
+  ```bash
+  .venv312/Scripts/pyinstaller.exe --noconfirm SolidGradeDesktop2.spec
+  ```
+
+  Close any running `SolidGradeDesktop2.exe` first — COLLECT deletes and
+  recreates `dist/SolidGradeDesktop2/` and cannot while the exe is alive.
+- **Student data is still in git history.** `output/` is now ignored and
+  `Quiz3_grades.json`, `Quiz3_grades.csv` and `MT26_grades.xlsx` were untracked
+  with `git rm --cached` (Milestone 3), so nothing new joins them and they are
+  still on disk — but **the earlier commits still contain them**. Purging that
+  needs a history rewrite (`git filter-repo`) and a force-push. Open decision.
+- **FIXED in Milestone 3:** a `print()` of `⚠` destroyed a *completed* grading
+  run on the frozen build — all students graded, PHASE 2 raised
+  `UnicodeEncodeError`, PHASE 3 never wrote the JSON. `app.py` now sets
+  `errors="replace"` on both streams. `MILESTONE_3_REPORT.md` §3.3. Kept here
+  because the *shape* of that failure — anything raising after the grading loop
+  costs the entire run — is the case for item 2.
 - **Surface `popup_dismisser`'s `dismissal_count` / `check_integrity_parity()`**
   in the System Ready panel (Milestone 1 item 8, built but never wired up).
 - **§7.2 ⑦** — the installer / SOLIDWORKS-path prompt / account login gap
@@ -258,25 +282,38 @@ any change to `app.py`, `grade_assignment.py` or `sw_connection.py`.
 
 ## The prompt
 
-> Claude Code Session — SolidGrade Desktop, Milestone 4
+> Claude Code Session — SolidGrade Desktop, Milestone 4: live results + checkpointing
 >
 > Read `MILESTONE_3_REPORT.md` first (what shipped, what was verified live, and
-> §3.1 — the `sw_connection.py` open-flag finding), then this file for the
-> priority list, then `MILESTONE_2_REPORT.md` for the earlier context.
+> §3.1 — the §15.3 fix and the timing change it produced), then this file.
 >
-> Item 1 (results depth) is built. **Confirm with me before starting anything
-> else** — the ordering of items 2–4 is still proposed, not agreed, and
-> Milestone 3 added a new item 0 (the `sw_connection.py` open flags) that is a
-> correctness question, not a feature, and needs a decision rather than a
-> default.
+> Build **item 2**: stream each student record out of the grading loop as it is
+> produced, so the results table fills in row by row AND each record is
+> persisted as it arrives. These are one change, not two —
+> `progress_callback` already fires immediately after `all_results.append(record)`
+> at [grade_assignment.py:604](grade_assignment.py:604) with the full record in
+> scope. Today the results JSON is written exactly once, after the whole loop
+> and the plagiarism pass, so a crash at student 25 of 26 loses all 25.
 >
-> Two things are worth doing regardless of what we pick, and are quick:
-> rebuild the frozen app so the Desktop shortcut runs current code, and decide
-> what to do about the three committed grading outputs in `output/`.
+> **Design around this, do not discover it:** plagiarism flags are computed in
+> PHASE 2 *after* every student is graded, so a live row must render its
+> plagiarism column as explicitly **pending** until the run completes — never as
+> "clean". The results view already has a three-state vocabulary and a
+> not-evaluated style to build that from; do not invent a fourth look.
+>
+> Reuse the existing endpoints and the Milestone 3 detail panel — a row that
+> arrives live should expand to the same seven cards. Style per
+> `SOLIDGRADE_WEB_REFERENCE.md` using the tokens already in `ui/styles.css`, and
+> keep the accessibility standard: real focus rings, focus that survives a
+> re-render, real dialogs, no colour-only status.
 >
 > Do not regress what Milestones 2 and 3 verified live — the list is under
-> "What must not regress" below, and `MILESTONE_3_REPORT.md` §2 has the
-> §15.3 evidence and the two test scripts' coverage.
+> "What must not regress" below. Run `tests/test_milestone3_row_actions.py` and
+> `tests/test_milestone2_regressions.py` before and after; their headers say how.
+>
+> While you are in the grading loop, read the per-file timings off the next real
+> run and tell me what per-file cost actually looks like now — Milestone 3's
+> numbers contradict each other and settled nothing.
 
 ## Note for whoever writes the next one
 

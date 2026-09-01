@@ -211,7 +211,17 @@ print("=" * 72)
 print("6. Nothing regressed — the results JSON on disk still parses and holds grades")
 print("=" * 72)
 ASSIGNMENT = res.get("assignmentName") or "M3_Test"
-disk = os.path.join(REPO, "output", ASSIGNMENT, ASSIGNMENT + "_grades.json")
+# app.py results_root(): a run from source writes to <repo>/output, a FROZEN
+# build writes to %LOCALAPPDATA%\SolidGrade\output so no rebuild can erase it.
+# Accept either, so this file works against both. SG_OUTPUT overrides.
+_roots = [os.environ["SG_OUTPUT"]] if os.environ.get("SG_OUTPUT") else [
+    os.path.join(REPO, "output"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "SolidGrade", "output"),
+]
+disk = next(
+    (c for c in (os.path.join(r, ASSIGNMENT, ASSIGNMENT + "_grades.json") for r in _roots)
+     if os.path.isfile(c)),
+    os.path.join(_roots[0], ASSIGNMENT, ASSIGNMENT + "_grades.json"))
 with open(disk, encoding="utf-8") as f:
     on_disk = json.load(f)
 check("results JSON on disk parses", bool(on_disk.get("students")))
@@ -223,7 +233,7 @@ check("grades survived the locate_sources rewrites",
 check("§15.1 — shape_score is a real number, not a swallowed 0",
       all(isinstance(s["checks"]["shape_score"], float) for s in on_disk["students"]),
       [s["checks"]["shape_score"] for s in on_disk["students"]])
-check("results were NOT written inside dist/", "dist" not in disk.lower().split(os.sep))
+check("results were NOT written inside dist/", "dist" not in disk.lower().split(os.sep), disk)
 
 print()
 print("=" * 72)

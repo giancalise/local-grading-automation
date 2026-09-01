@@ -1,9 +1,21 @@
 # SolidGrade Desktop — Milestone 3 Report: Results Depth
 
-Session date: 2026-08-31. Follows `MILESTONE_2_REPORT.md`. Builds item 1 of the
-agreed priority list in `NEXT_SESSION_PROMPT.md` — per-student detail plus the
-two §12.6 row actions the instructor chose — and nothing below it. Items 2–4
-were not started; the ordering was to be confirmed first.
+Session dates: 2026-08-31 – 2026-09-01. Follows `MILESTONE_2_REPORT.md`.
+
+Builds **item 1** of the agreed priority list in `NEXT_SESSION_PROMPT.md` —
+per-student detail plus the two §12.6 row actions the instructor chose — and
+none of items 2–4, whose ordering the instructor confirmed at the end of the
+session (2, then 3, then 4).
+
+Two defects found along the way were fixed **on the instructor's explicit
+authorisation**, because both destroy or silently weaken real work:
+
+- **§3.1** — SPEC §15.3 point 1 (open student files read-only) had never
+  actually executed, in any milestone. Fixed and verified.
+- **§3.3** — a `print()` of a `⚠` glyph threw away a **completed** grading run
+  on the frozen build. Reproduced, fixed, and re-verified.
+
+The frozen app was rebuilt so the Desktop shortcut carries all of it.
 
 ---
 
@@ -211,10 +223,10 @@ Clicking **Reveal in File Explorer**: `POST /api/reveal_file` → 200.
 
 ## 3. Findings
 
-### 3.1 `sw_connection.py`'s open flags are wrong, and §15.3 point 1 has never been in force
+### 3.1 §15.3 point 1 had never actually run — found, and FIXED
 
-**This is the most important thing in this report, and it is not a regression —
-it predates this session.**
+**This is the most important thing in this report. It is not a regression — it
+predates every milestone — and it is now fixed and verified.**
 
 `sw_connection.py` lines 49–50:
 
@@ -259,14 +271,79 @@ deletes it. The original is never handed to SOLIDWORKS at all. That is why every
 hash and mtime check has passed — twice in Milestone 2 and again here. The
 defence in depth §15.3 asks for is missing; the load-bearing defence is intact.
 
-The fix is small and now precisely understood — `SW_OPEN_SILENT = 1`,
-`SW_OPEN_READ_ONLY = 2`, and BYREF `VARIANT`s for the two out-parameters, which
-is exactly what the new endpoint does and what was verified working. **It was not
-applied.** It changes the live-verified grading path (options would go from
-`ReadOnly|AutoMissingConfig` to `Silent|ReadOnly`, and a genuinely read-only open
-must be re-proven not to break the `SaveAs`-based STL export), it is not on the
-agreed priority list, and proving it takes a full grading run. It should be the
-first thing next session, or authorised now.
+#### The fix, applied and verified
+
+Authorised by the instructor during this session. Two changes in
+`sw_connection.py`, both commented in place:
+
+1. `SW_OPEN_SILENT = 1`, `SW_OPEN_READ_ONLY = 2`.
+2. `Errors` and `Warnings` passed as real BYREF `VARIANT`s.
+
+A third change makes the failure mode loud rather than silent: after any open,
+`IsOpenedReadOnly` is read back, and a writable document logs a
+`SPEC §15.3` warning naming the file. The read-write fallbacks (`OpenDoc2`,
+bare `OpenDoc`) were **kept** — removing them would turn a difficult file into a
+hard grading failure, and grading only ever hands SOLIDWORKS a read-only scratch
+copy anyway. What changed is that reaching one can no longer go unnoticed, which
+is precisely why this survived three milestones.
+
+**The risk that had to be retired first** was whether a genuinely read-only
+document still supports the `SaveAs`-based STL export. Measured directly against
+a scratch copy prepared exactly the way `grade_assignment.py` prepares one
+(copied, then `chmod` read-only):
+
+| Check | Result |
+|---|---|
+| `OpenDoc6 (Silent\|ReadOnly)` succeeds — strategy 1, no fallback | **PASS** (`errors=0`) |
+| `IsOpenedReadOnly` | **True** — §15.3 point 1 now genuinely in force |
+| `ForceRebuild3` on the read-only document | **PASS** |
+| **STL export on the read-only document** | **PASS** — 274,784 bytes |
+| Scratch copy byte-identical | **PASS** |
+| Original byte-identical | **PASS** |
+
+Then a full grading run through `/api/run_grading`, followed by both suites:
+
+| Check | Result |
+|---|---|
+| Grades unchanged by the fix | **PASS** — 85.0/100, same four check verdicts |
+| STLs still produced | **PASS** — 3 × 274,784 bytes |
+| Plagiarism pass still fires | **PASS** |
+| Zero `SPEC §15.3` warnings, i.e. every open took strategy 1 | **PASS** |
+| `tests/test_milestone3_row_actions.py` | **36 passed, 0 failed** |
+| `tests/test_milestone2_regressions.py` | **16 passed, 0 failed** |
+
+#### A timing change that is NOT established, and should not be quoted as one
+
+`Silent` was never actually being set — the old constant put a 2 where a 1
+belonged — so with it genuinely set, SOLIDWORKS should stop raising the dialogs
+the popup dismisser was polling for and clicking away.
+
+**What is solid:** the popup dismissals went to zero. Pre-fix logs show
+`Auto-dismissed: title='SOLIDWORKS Design'` events; the post-fix run logged
+none. That is directly attributable to the flag and is exactly what setting
+`Silent` should do.
+
+**What is not solid: the speed.** Measured, all on the same two-file fixture and
+the same machine:
+
+| Build | Per-file |
+|---|---|
+| From source, before the fix | 48.9 s, 51.1 s |
+| From source, after the fix | 23.2 s, 23.2 s |
+| **Frozen build, after the fix** | **110.3 s, 75.2 s** |
+
+The from-source A/B looks like a 2× win. The frozen run immediately afterwards
+was **slower than anything measured this session**, and slower than Milestone 2's
+55.5 s frozen figure for the same fixture. So whatever the flag does, it is
+swamped by something larger — frozen-vs-source overhead, and most likely the R-7
+degradation that `MILESTONE_2_REPORT.md` §6.1 documents, since SOLIDWORKS had by
+then been open and heavily exercised for hours of testing.
+
+**Conclusion: one run per condition proves nothing about throughput.** The
+popup-dismissal count is a real, mechanistic improvement. The per-file timing is
+noise at this sample size and the 2× reading is not supported. Do not plan around
+it. The per-file numbers are already in the progress display; read them off the
+next real 26-student run, which is the only sample that would settle it.
 
 ### 3.2 `output/` was not git-ignored
 
@@ -276,24 +353,55 @@ absolute paths to every submission on disk. That is the same sensitivity `*.log`
 is already excluded for. `output/` has been added to `.gitignore`.
 
 Three files were **already committed** there before this session
-(`Quiz3_grades.json`, `Quiz3_grades.csv`, `MT26_grades.xlsx`) and remain tracked —
-adding an ignore rule does not untrack them. Whether to remove them from the
-working tree or from history is the instructor's call, not a change to make
-unasked.
+(`Quiz3_grades.json`, `Quiz3_grades.csv`, `MT26_grades.xlsx`); adding an ignore
+rule does not untrack an already-tracked file. On the instructor's instruction
+they were removed from the index with `git rm --cached`, so they are no longer
+tracked and the `output/` rule now covers them. **The files are still on disk**
+— nothing was deleted — **and they are still in git history.** Purging history
+would need a rewrite (`git filter-repo` or equivalent) and a force-push, which is
+a separate decision and was not done.
 
-### 3.3 A `print()` of `⚠` kills an entire grading run when stdout is not UTF-8
+### 3.3 A `print()` of `⚠` destroys a completed grading run — found, and FIXED
 
-Hit accidentally. Running from source with stdout redirected to a file, Python
-uses the locale encoding (cp1252 here), and `grade_assignment.py`'s `print("  ⚠
-…")` raises `UnicodeEncodeError`. That exception escapes to
-`_run_grading_thread`'s outer `except`, and the whole run is reported as failed
-with the message `'charmap' codec can't encode character '⚠'`.
+Hit by accident, then reproduced deliberately on the **frozen build**, which is
+what makes it serious.
 
-**The shipped app is not affected** — `app.py` opens its log file with
-`encoding="utf-8"` when frozen and console-less. It bites anyone running from
-source without `PYTHONIOENCODING=utf-8`. Reported, not fixed: it is unrelated to
-this session's scope and the fix (a UTF-8 reconfigure at startup, or ASCII
-markers) is a judgement call about the console output the instructor sees.
+`grade_assignment.py` prints `"  ⚠ PLAGIARISM: ..."` in PHASE 2 and
+`"  ⚠ Recovered from SW stall"` in PHASE 1. If `sys.stdout` cannot encode
+U+26A0 — any Windows console or inherited pipe on a cp1252 locale — `print()`
+raises `UnicodeEncodeError`. Nothing catches it near where it is raised: it
+propagates out of PHASE 2, past `_run_grading_thread`'s outer handler, and the
+run is reported as `"error"`. **PHASE 3 never runs, so the results JSON is never
+written and every grade is lost**, even though all the grading itself succeeded.
+
+Reproduced live on `dist\SolidGradeDesktop2\SolidGradeDesktop2.exe` after this
+session's rebuild: both students graded correctly, both were flagged for a shared
+author, the plagiarism print fired, and the run died with
+`'charmap' codec can't encode character '⚠' in position 2`. Two students'
+completed work, discarded.
+
+**An earlier draft of this report said the shipped app was unaffected. That was
+wrong.** `app.py` redirects to a UTF-8 log only when `sys.stdout is None`, which
+is the `--noconsole` shortcut case. Launch the same exe from a terminal and it
+inherits an encodable-only-in-cp1252 stdout, and the bug is live. What matters is
+whether stdout can encode, not whether the app is frozen.
+
+**Fixed** in `app.py`, immediately after the existing redirect: both streams get
+`reconfigure(errors="replace")`, so the glyph degrades to `?` on a console that
+cannot render it. `errors="replace"` rather than forcing an encoding, because the
+goal is that no printable character can ever again cost a run.
+
+Verified two ways:
+
+| Check | Result |
+|---|---|
+| Reproduce the failure: cp1252 stdout, `errors="strict"`, the exact PHASE 2 plagiarism line | **raises `UnicodeEncodeError`** |
+| After `app.py` loads, same stream | `errors` is `replace`; the line prints as `  ? PLAGIARISM: alpha ? bravo (author=GCE4)` and **does not raise** |
+| Rebuild, then re-run the identical two-student job on the frozen `.exe` from a terminal — the exact condition that destroyed it | **complete**, both students 85.0, both plagiarism-flagged, `source_path` and `students_folder` recorded |
+
+**Worth noting for item 2**: checkpointing would have made this survivable
+independently — records persisted as they arrive cannot be lost by a crash in
+PHASE 2. This is a concrete argument for the next milestone.
 
 ### 3.4 `IsOpenedReadOnly` and friends are properties, not methods, under dynamic dispatch
 
@@ -304,33 +412,47 @@ it works either way. Worth knowing before writing more `IModelDoc2` code.
 
 ---
 
-## 4. What was NOT done, and why
+## 4. Rebuilt, and what was still not done
 
-- **The frozen build was not rebuilt.** A `SolidGradeDesktop2.exe` (PID 40692) is
-  running and **holding a completed 26-student run in memory**. PyInstaller's
-  COLLECT step deletes and recreates `dist/SolidGradeDesktop2/`, which cannot
-  happen while that exe is running, and killing the instructor's app to make it
-  possible is not a call to make unasked. **The Desktop shortcut therefore still
-  launches Milestone 2 code.** The run's grades, CSV, reviewed CSV and STLs are
-  safely on disk at `%LOCALAPPDATA%\SolidGrade\output\SolidGrade_Run`
-  (verified: 26 students, `gradedAt` 2026-08-31T19:29:56Z). To pick up this
-  session's work, close the app and run:
-
-  ```bash
-  pyinstaller --noconfirm SolidGradeDesktop2.spec
-  ```
+- **The frozen build WAS rebuilt** — twice, and the second one is what ships.
+  The first rebuild happened once the instructor closed the
+  `SolidGradeDesktop2.exe` that had been holding a completed 26-student run in
+  memory (PyInstaller's COLLECT step deletes and recreates
+  `dist/SolidGradeDesktop2/`, so it could not run while that exe was alive). The
+  §15.3 fix in §3.1 landed after that, so it was rebuilt again. Verified before
+  touching `dist/`: no `output/` directory or any `.json`/`.csv`/`.stl` inside
+  it, and the 26-student run intact at
+  `%LOCALAPPDATA%\SolidGrade\output\SolidGrade_Run` (26 students, `gradedAt`
+  2026-08-31T19:29:56Z, STLs present).
 
   No spec change was needed — no files were added under `ui/`, and every new
   import (`win32com.client.VARIANT`, `win32com.client.dynamic`, `pythoncom`) is
   already reachable from modules the existing build collects.
 
-- **The webview window was not re-exercised.** `run_window()` and `main()` are
-  untouched, and the single-instance guard would have focused the running frozen
-  app rather than opening a second window. The UI was verified in a real browser
-  against the same Flask server serving the same `ui/` files.
+  **A trap worth recording**: `pyinstaller` is installed only inside
+  `.venv312\Scripts\` and is not on PATH, so a bare `pyinstaller` in a terminal
+  fails with "command not found". The command that works from the repo root is:
 
-- **Items 2–4 were not started.** The kickoff asks for the ordering to be
-  confirmed first.
+  ```bash
+  .venv312/Scripts/pyinstaller.exe --noconfirm SolidGradeDesktop2.spec
+  ```
+
+  **The shipped build was verified, not just produced.** A full grading job was
+  run through the rebuilt `.exe`: complete, both students 85.0 with the same four
+  check verdicts, both plagiarism-flagged, `source_path` and `students_folder`
+  recorded, student files and solution still `899c98038d1ee227…`. Both suites
+  were then run against the frozen server — **36 + 16, all green** — including
+  the check that results land in `%LOCALAPPDATA%\SolidGrade\output` and not
+  inside `dist/`. Shut Down exited cleanly with no stray `.stl_prefs_backup.json`.
+
+- **The webview window itself was not re-exercised.** The rebuilt `.exe` was
+  driven through its HTTP surface, and the UI was verified in a real browser
+  against the same `ui/` files the build bundles, but `run_window()` — untouched
+  this session — was not opened and closed by hand again.
+
+- **Items 2–4 were not started.** The instructor confirmed the ordering at the
+  end of the session: **item 2 (live results table + §11.1 checkpointing) is
+  next.** It was not begun here.
 
 ---
 
@@ -339,10 +461,11 @@ it works either way. Worth knowing before writing more `IModelDoc2` code.
 | File | Change |
 |---|---|
 | `grade_assignment.py` | `+17` — `students_folder`, `source_path`, schema docstring |
-| `app.py` | `+~330` — three endpoints, the read-only open, path authorization, fingerprinting |
+| `app.py` | `+~355` — three endpoints, the read-only open, path authorization, fingerprinting, and the §3.3 stdout hardening |
 | `ui/app.js` | `+~490` — detail panel, row actions, expand state, focus restoration |
 | `ui/styles.css` | `+127` — detail panel, using existing tokens only |
 | `ui/index.html` | `+1` — one icon (`external-link`) |
+| `sw_connection.py` | `+~40` — the §15.3 flag and BYREF fix, plus a warning when an open is writable |
 | `.gitignore` | `+8` — `output/` |
 | `tests/test_milestone3_row_actions.py` | new — the 36-check suite |
 | `tests/test_milestone2_regressions.py` | new — the 16-check suite |

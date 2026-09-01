@@ -64,6 +64,31 @@ if getattr(sys, "frozen", False) and (sys.stdout is None or sys.stderr is None):
     sys.stdout = _log_file
     sys.stderr = _log_file
 
+# --- The other half of the same gotcha, and a worse one: stdout can EXIST
+# and still be unable to encode what we print. On Windows a console (or an
+# inherited pipe) uses the locale codepage -- cp1252 here -- and
+# grade_assignment.py prints "  ⚠ PLAGIARISM: ..." and "  ⚠ Recovered from
+# SW stall". UnicodeEncodeError from a print() is not caught anywhere near
+# where it is raised: it propagates out of PHASE 2, past the outer handler
+# in _run_grading_thread, and the whole run is reported as "error" -- so a
+# COMPLETE set of grades is thrown away because a warning glyph could not be
+# written to a terminal.
+#
+# Observed live in Milestone 3, on the FROZEN build launched from a shell:
+# 2 students graded successfully, both flagged for a shared author, and the
+# run died with "'charmap' codec can't encode character '⚠'". The
+# earlier belief that only runs-from-source were affected was wrong -- what
+# matters is whether stdout can encode, not whether the app is frozen.
+#
+# errors="replace" rather than an encoding change: the glyph degrades to "?"
+# on a console that cannot show it, and nothing can ever again turn a
+# printable character into a lost grading run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass   # Not a TextIOWrapper (already the log file, or redirected)
+
 from flask import Flask, jsonify, request, send_from_directory
 
 import self_test as self_test_module
